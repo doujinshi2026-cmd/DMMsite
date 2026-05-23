@@ -2,6 +2,15 @@
 
 DMM/FANZAアフィリエイト審査前でも使える、ローカルSQLite中心の最小BOT基盤です。
 
+2026-05-23時点の優先順位は、BOT自動投稿よりもWeb管理画面での記事作成です。
+記事作成はリポジトリ直下で次を実行します。
+
+```powershell
+npm run blog:admin
+```
+
+BOTは、記事形式が固まった後に下書き生成・SNS投稿へ接続する位置づけです。
+
 ## 現在の範囲
 
 - 作品候補の手動登録
@@ -34,4 +43,3 @@ python -m bot.database has-posted manual-001
 - APIキーやアクセストークンはDBやMarkdownに保存しません。
 - アダルト向けサイトとして運用する前提のため、DBは `age_category = adult` のみ許可します。
 - DMM側で許諾された広告素材以外は保存・加工しない方針です。
-

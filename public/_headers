@@ -1,0 +1,24 @@
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: accelerometer=(), ambient-light-sensor=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(self), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(), sync-xhr=(), usb=(), xr-spatial-tracking=()
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://doujin-assets.dmm.co.jp https://*.dmm.co.jp https://*.dmm.com; connect-src 'self'; upgrade-insecure-requests
+  Cross-Origin-Resource-Policy: same-site
+  X-Robots-Tag: index, follow
+
+/api/*
+  X-Robots-Tag: noindex, nofollow, noarchive
+  Cache-Control: no-store
+
+/preview/*
+  X-Robots-Tag: noindex, nofollow, noarchive
+  Cache-Control: no-store
+
+/admin/*
+  X-Robots-Tag: noindex, nofollow, noarchive
+  Cache-Control: no-store
+
+/admin.js
+  X-Robots-Tag: noindex, nofollow, noarchive
+  Cache-Control: no-store

@@ -11,8 +11,12 @@ database/*.sqlite3
 
 logs/*.log
 
+# Local planning and operation notes. Keep these on this machine only.
+doc/
+manual/
+history/
+
 node_modules/
 .next/
 out/
 dist/
-

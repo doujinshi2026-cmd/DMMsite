@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ブログ記事エディタ</title>
+  <link rel="stylesheet" href="/admin.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <p>Blog CMS</p>
+        <h1>記事管理</h1>
+      </div>
+
+      <div class="side-actions">
+        <button class="primary" id="newArticleButton" type="button">新規</button>
+        <a class="ghost-link" href="/site" target="_blank" rel="noopener noreferrer">サイト表示</a>
+      </div>
+
+      <label class="field">
+        <span>検索</span>
+        <input id="searchInput" type="search" placeholder="タイトル、サークル、作者、タグ">
+      </label>
+
+      <label class="field">
+        <span>状態</span>
+        <select id="statusFilter">
+          <option value="all">すべて</option>
+          <option value="draft">下書き</option>
+          <option value="ready">公開準備</option>
+          <option value="published">公開</option>
+          <option value="archived">保管</option>
+        </select>
+      </label>
+
+      <div class="article-list" id="articleList"></div>
+    </aside>
+
+    <main class="editor">
+      <header class="editor-top">
+        <div>
+          <p id="filePath">content/posts/new.md</p>
+          <h2 id="screenTitle">新しい記事</h2>
+        </div>
+        <div class="toolbar">
+          <button id="restoreDraftButton" class="ghost" type="button" hidden>復元</button>
+          <button id="previewPageButton" class="ghost" type="button">別画面プレビュー</button>
+          <button id="saveButton" class="primary" type="button">保存</button>
+        </div>
+      </header>
+
+      <section class="form-grid">
+        <label class="field wide">
+          <span>タイトル</span>
+          <input id="titleInput" type="text" placeholder="記事タイトル">
+        </label>
+
+        <label class="field">
+          <span>slug</span>
+          <input id="slugInput" type="text" placeholder="review-title">
+        </label>
+
+        <label class="field">
+          <span>状態</span>
+          <select id="articleStatusInput">
+            <option value="draft">下書き</option>
+            <option value="ready">公開準備</option>
+            <option value="published">公開</option>
+            <option value="archived">保管</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>種類</span>
+          <select id="articleTypeInput">
+            <option value="review">レビュー</option>
+            <option value="column">コラム</option>
+            <option value="news">ニュース</option>
+            <option value="list">まとめ</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>公開日時</span>
+          <input id="publishedAtInput" type="datetime-local">
+        </label>
+
+        <label class="field wide">
+          <span>抜粋</span>
+          <textarea id="excerptInput" rows="3" placeholder="検索結果や記事一覧に出す短い説明"></textarea>
+        </label>
+
+        <label class="field">
+          <span>作品名</span>
+          <input id="productTitleInput" type="text">
+        </label>
+
+      <label class="field">
+        <span>サークル名</span>
+        <input id="circleNameInput" type="text">
+      </label>
+
+      <label class="field">
+        <span>作者名</span>
+        <input id="authorNameInput" type="text">
+      </label>
+
+      <label class="field wide">
+        <span>元ページURL</span>
+        <input id="sourceUrlInput" type="url">
+      </label>
+
+        <label class="field wide">
+          <span>アフィリエイトURL</span>
+          <input id="affiliateUrlInput" type="url">
+        </label>
+
+        <label class="field wide">
+          <span>サムネイルURL</span>
+          <input id="thumbnailUrlInput" type="text" placeholder="/uploads/2026/05/image.webp">
+        </label>
+
+        <label class="field wide">
+          <span>ジャンル</span>
+          <textarea id="genresInput" rows="3" placeholder="制服&#10;処女&#10;巨乳"></textarea>
+          <small class="field-hint">1行1タグ、またはスペース・読点「、」・カンマ「,」区切りで入力</small>
+        </label>
+
+        <label class="field">
+          <span>感情タグ</span>
+          <input id="emotionsInput" type="text" placeholder="甘々, 切ない">
+        </label>
+
+        <label class="field">
+          <span>画像権利</span>
+          <select id="rightsStatusInput">
+            <option value="pending_review">確認中</option>
+            <option value="approved_ad_material">広告素材として利用可</option>
+            <option value="link_only">リンクのみ</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>PR表記</span>
+          <input id="prLabelInput" type="text" value="PR">
+        </label>
+      </section>
+
+      <section class="workspace">
+        <div class="editor-panel">
+          <div class="panel-header">
+            <div class="format-actions">
+              <button type="button" data-insert="## 見出し\n\n">見出し</button>
+              <button type="button" data-wrap="**">太字</button>
+              <button type="button" data-insert="> 引用メモ\n\n">引用</button>
+              <button type="button" id="templateButton">構成</button>
+              <button type="button" id="prBlockButton">PR</button>
+              <button type="button" id="ctaButton">CTA</button>
+            </div>
+            <p id="writingStats">0文字</p>
+          </div>
+          <textarea id="bodyInput" class="markdown-input" spellcheck="true"></textarea>
+        </div>
+
+        <aside class="assist-panel">
+          <div class="tabs">
+            <button class="active" type="button" data-tab="preview">Preview</button>
+            <button type="button" data-tab="media">Media</button>
+            <button type="button" data-tab="check">Check</button>
+          </div>
+
+          <div class="tab-page active" id="previewTab">
+            <article class="preview" id="previewPane"></article>
+          </div>
+
+          <div class="tab-page" id="mediaTab">
+            <label class="field">
+              <span>画像</span>
+              <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif">
+            </label>
+            <label class="field">
+              <span>alt</span>
+              <input id="imageAltInput" type="text" placeholder="画像の説明">
+            </label>
+            <button id="uploadImageButton" class="primary" type="button">アップロードして挿入</button>
+            <div class="media-list" id="mediaList"></div>
+          </div>
+
+          <div class="tab-page" id="checkTab">
+            <div class="check-list" id="checkList"></div>
+            <div class="seo-box" id="seoBox"></div>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="/admin.js" type="module"></script>
+</body>
+</html>
