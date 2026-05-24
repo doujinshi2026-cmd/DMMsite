@@ -7,15 +7,16 @@
     "blog:admin": "node scripts/blog-admin.mjs",
     "dmm:import": "node scripts/dmm-ranking-import.mjs",
     "dmm:import:dry": "node scripts/dmm-ranking-import.mjs --dry-run",
+    "cf:config": "node scripts/verify-cloudflare-config.mjs",
     "cf:check": "node --check src/worker.js",
     "cf:dev": "npx wrangler dev --test-scheduled",
-    "cf:deploy": "npx wrangler deploy",
+    "cf:deploy": "npm run cf:config && npx wrangler deploy",
     "cf:d1:create": "npx wrangler d1 create dmmsite-db",
     "cf:d1:init:local": "npx wrangler d1 execute dmmsite-db --local --file=database/d1-schema.sql",
-    "cf:d1:init:remote": "npx wrangler d1 execute dmmsite-db --remote --file=database/d1-schema.sql",
+    "cf:d1:init:remote": "npm run cf:config && npx wrangler d1 execute dmmsite-db --remote --file=database/d1-schema.sql",
     "cf:d1:seed": "node scripts/export-posts-to-d1-seed.mjs",
     "cf:d1:seed:local": "npm run cf:d1:seed && npx wrangler d1 execute dmmsite-db --local --file=database/d1-seed.sql",
-    "cf:d1:seed:remote": "npm run cf:d1:seed && npx wrangler d1 execute dmmsite-db --remote --file=database/d1-seed.sql"
+    "cf:d1:seed:remote": "npm run cf:config && npm run cf:d1:seed && npx wrangler d1 execute dmmsite-db --remote --file=database/d1-seed.sql"
   },
   "devDependencies": {
     "wrangler": "^4.94.0"

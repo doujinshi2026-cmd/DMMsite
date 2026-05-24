@@ -154,6 +154,13 @@ npm run cf:d1:create
 ```
 
 `cf:d1:create` の出力に表示される `database_id` を `wrangler.jsonc` の `00000000-0000-0000-0000-000000000000` と置き換えます。
+この置き換えが終わるまで、`cf:d1:init:remote` と `cf:deploy` は実行しないでください。
+
+設定が置き換わったか確認します。
+
+```powershell
+npm run cf:config
+```
 
 管理画面を外部公開するため、必ずパスワードをSecretに入れます。
 
