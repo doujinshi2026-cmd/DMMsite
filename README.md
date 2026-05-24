@@ -90,7 +90,7 @@ src/worker.js           Cloudflare Workers用の公開サイト/API/Cron
 
 ## DMMランキングから自動作成
 
-24時間人気ランキングの上位10件を取得し、未投稿の作品だけレビュー記事として追加できます。
+24時間人気ランキングの上位100件を取得し、未投稿の作品はレビュー記事として追加し、既存記事の抜粋が空なら作品コメントで補完できます。
 
 ```powershell
 npm run dmm:import
@@ -105,7 +105,7 @@ npm run dmm:import:dry
 取り込み内容:
 
 - 対象URL: `https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=popular/term=h24/`
-- 対象順位: 上位10件
+- 対象順位: 上位100件
 - 重複判定: `cid=d_...`、slug、元ページURL、作品名
 - 状態: `published`
 - 種類: `review`
@@ -113,9 +113,10 @@ npm run dmm:import:dry
 - タイトル、slug、作品名: ランキングの `.rank-name`
 - サークル名: ランキングの `.rank-circle`
 - ジャンル: 作品ページの `.c_icon_detailGenreTag`
+- 抜粋: 作品ページの「作品コメント」内の `.summary__txt`
 - サムネイルURL: 作品ページ内の `doujin-assets.dmm.co.jp` のPR画像
 - 元ページURL、広告URL: 作品ページへ遷移した後のURL
-- 抜粋、作者名、本文: 空欄
+- 作者名、本文: 空欄
 
 Windowsで毎日12:00に実行する場合は、タスクスケジューラへ登録します。
 
