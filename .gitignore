@@ -8,6 +8,7 @@ __pycache__/
 database/*.db
 database/*.sqlite
 database/*.sqlite3
+database/d1-seed.sql
 
 logs/*.log
 

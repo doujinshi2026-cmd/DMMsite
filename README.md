@@ -55,8 +55,8 @@ npm run blog:admin -- --port 4174
 - 記事量、PR表記、広告リンク、画像権利の簡易チェック
 - `/site` でブログ表示の確認
 
-CMSはローカル作業用です。Cloudflareへ公開する対象には含めません。
-共有PC、Cloudflare Tunnel、外部公開サーバーでCMSを開く場合は、必ず `BLOG_CMS_USER` と `BLOG_CMS_PASSWORD` を設定してください。
+ローカルCMSを共有PC、Cloudflare Tunnel、外部公開サーバーで開く場合は、必ず `BLOG_CMS_USER` と `BLOG_CMS_PASSWORD` を設定してください。
+Cloudflare Workers版では `/admin` をBasic認証付きで公開できます。
 
 ## 作品一覧の検索
 
@@ -84,14 +84,137 @@ public/uploads/         アップロード画像
 tools/blog-admin/       管理画面
 scripts/blog-admin.mjs  ローカル管理サーバー
 lib/content-store.mjs   記事・画像の保存ロジック
+database/d1-schema.sql  Cloudflare D1用の記事テーブル
+src/worker.js           Cloudflare Workers用の公開サイト/API/Cron
 ```
+
+## DMMランキングから自動作成
+
+24時間人気ランキングの上位10件を取得し、未投稿の作品だけレビュー記事として追加できます。
+
+```powershell
+npm run dmm:import
+```
+
+動作確認だけ行い、記事ファイルを作らない場合は次を使います。
+
+```powershell
+npm run dmm:import:dry
+```
+
+取り込み内容:
+
+- 対象URL: `https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=popular/term=h24/`
+- 対象順位: 上位10件
+- 重複判定: `cid=d_...`、slug、元ページURL、作品名
+- 状態: `published`
+- 種類: `review`
+- 公開日: 取り込み実行時刻
+- タイトル、slug、作品名: ランキングの `.rank-name`
+- サークル名: ランキングの `.rank-circle`
+- ジャンル: 作品ページの `.c_icon_detailGenreTag`
+- サムネイルURL: 作品ページ内の `doujin-assets.dmm.co.jp` のPR画像
+- 元ページURL、広告URL: 作品ページへ遷移した後のURL
+- 抜粋、作者名、本文: 空欄
+
+Windowsで毎日12:00に実行する場合は、タスクスケジューラへ登録します。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\register-dmm-ranking-task.ps1
+```
+
+ログは `logs/dmm-ranking-import.log` に追記されます。時刻を変える場合は次のように指定します。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\register-dmm-ranking-task.ps1 -At 12:00
+```
+
+## Cloudflare Workersで12:00自動更新
+
+本番運用では、ローカルPCのタスクスケジューラではなくCloudflare WorkersのCron Triggerで更新します。
+この構成では、公開サイト・管理画面・DMMランキング取り込みを1つのWorkerで動かし、記事データはD1に保存します。
+
+Cloudflare側の構成:
+
+- Worker名: `dmmsite`
+- D1 database: `dmmsite-db`
+- 公開サイト: `/site`
+- 管理画面: `/admin`
+- 手動取り込み: `/api/dmm/import?dryRun=1`
+- Cron: `0 3 * * *`
+
+CloudflareのCronはUTC基準です。日本時間12:00はUTC 03:00なので、`wrangler.jsonc` では `0 3 * * *` を設定しています。
+
+初回セットアップ:
+
+```powershell
+npm install -D wrangler@latest
+npx wrangler login
+npm run cf:d1:create
+```
+
+`cf:d1:create` の出力に表示される `database_id` を `wrangler.jsonc` の `00000000-0000-0000-0000-000000000000` と置き換えます。
+
+管理画面を外部公開するため、必ずパスワードをSecretに入れます。
+
+```powershell
+npx wrangler secret put BLOG_CMS_PASSWORD
+```
+
+D1のテーブルを作成します。
+
+```powershell
+npm run cf:d1:init:remote
+```
+
+既存の `content/posts/*.md` をD1へ移す場合は、seed SQLを生成して流し込みます。
+
+```powershell
+npm run cf:d1:seed
+npx wrangler d1 execute dmmsite-db --remote --file=database/d1-seed.sql
+```
+
+ローカルでWorkerを確認する場合:
+
+```powershell
+npm run cf:d1:init:local
+npm run cf:d1:seed:local
+npm run cf:dev
+```
+
+Cron処理はローカルでも手動で呼び出せます。
+
+```powershell
+curl "http://localhost:8787/cdn-cgi/handler/scheduled"
+```
+
+DMM取り込みだけを管理者認証付きで確認する場合は、ブラウザで `/admin` にログインしたあと、次のURLを開きます。
+
+```text
+http://localhost:8787/api/dmm/import?dryRun=1
+```
+
+問題なければデプロイします。
+
+```powershell
+npm run cf:deploy
+```
+
+デプロイ後の確認:
+
+- `https://<your-worker-domain>/site` で公開サイトを確認
+- `https://<your-worker-domain>/admin` で管理画面を確認
+- `/api/dmm/import?dryRun=1` で新規候補だけを確認
+- `/api/dmm/import` で手動取り込み
+- Cloudflare Dashboard の Workers & Pages > `dmmsite` > Settings > Triggers でCronを確認
+- Workers Logsで `dmm-ranking-import` のログを確認
 
 ## 運用方針
 
 - 申請前は自分で書いた独自レビューを増やします。
 - 画像は公式に許諾された広告素材、または利用許諾が明確な素材だけを使います。
 - 記事上部とCTA付近に `PR` または `広告` の表記を入れます。
-- 将来の自動化は、記事Markdownを生成・更新する方向で接続します。
+- ローカル作業ではMarkdown、Cloudflare本番ではD1を記事データの保存先にします。
 
 ## Cloudflare公開
 
@@ -101,4 +224,5 @@ Cloudflare公開時のセキュリティ設定は次にまとめています。
 manual/2026-05-23_cloudflare-security-deploy.md
 ```
 
-公開前に `/api/*`、`/preview/*`、`/admin.js`、`/tools/*`、`/scripts/*`、`/content/*`、`/database/*` が外部から見えないことを確認してください。
+Cloudflare Workers版では `/api/*`、`/preview/*`、`/admin`、`/admin.js` をBasic認証で保護します。
+デプロイ前に `BLOG_CMS_PASSWORD` をSecretへ設定してください。

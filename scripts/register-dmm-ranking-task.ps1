@@ -1,0 +1,29 @@
+param(
+  [string]$TaskName = "DMM Ranking Import",
+  [string]$At = "12:00"
+)
+
+$ErrorActionPreference = "Stop"
+
+$ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$Runner = Join-Path $ProjectRoot "scripts\run-dmm-ranking-import.ps1"
+$RunAt = [DateTime]::ParseExact($At, "HH:mm", [Globalization.CultureInfo]::InvariantCulture)
+
+$Action = New-ScheduledTaskAction `
+  -Execute "powershell.exe" `
+  -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$Runner`""
+$Trigger = New-ScheduledTaskTrigger -Daily -At $RunAt
+$Settings = New-ScheduledTaskSettingsSet `
+  -StartWhenAvailable `
+  -MultipleInstances IgnoreNew `
+  -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+
+Register-ScheduledTask `
+  -TaskName $TaskName `
+  -Action $Action `
+  -Trigger $Trigger `
+  -Settings $Settings `
+  -Description "Import new review posts from the DMM doujin comic 24h ranking." `
+  -Force | Out-Null
+
+Write-Host "Registered scheduled task '$TaskName' at $At."
