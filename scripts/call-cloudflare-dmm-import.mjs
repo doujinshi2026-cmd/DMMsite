@@ -47,6 +47,7 @@ function summarize(payload) {
   return {
     seen: payload.seen,
     created: payload.created,
+    updated: payload.updated,
     skipped: payload.skipped,
     failed: payload.failed,
     dry_run: payload.dry_run,

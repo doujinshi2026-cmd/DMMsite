@@ -1,8 +1,8 @@
-import { listArticles, saveArticle, slugify } from "../lib/content-store.mjs";
+import { listArticles, readArticle, saveArticle, slugify } from "../lib/content-store.mjs";
 
 const DEFAULT_RANKING_URL =
   "https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=popular/term=h24/";
-const DEFAULT_LIMIT = 10;
+const DEFAULT_LIMIT = 100;
 const REQUEST_TIMEOUT_MS = 30000;
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -37,20 +37,23 @@ async function main() {
   const summary = {
     seen: rankingItems.length,
     created: 0,
+    updated: 0,
     skipped: 0,
     failed: 0,
   };
 
   for (const item of rankingItems) {
+    const slug = slugify(item.title);
     const earlyDuplicate = findDuplicate(existing, {
       title: item.title,
       circleName: item.circleName,
-      slug: slugify(item.title),
+      slug,
       urls: [item.url],
       productId: extractProductId(item.url),
     });
+    const earlyExistingArticle = earlyDuplicate ? await readExistingArticle(earlyDuplicate.value) : null;
 
-    if (earlyDuplicate) {
+    if (earlyDuplicate && hasExcerpt(earlyExistingArticle)) {
       summary.skipped += 1;
       console.log(
         `[dmm-ranking] skip #${item.rank} ${item.title} (${earlyDuplicate.reason}: ${earlyDuplicate.value})`
@@ -62,11 +65,32 @@ async function main() {
       const detailResponse = await fetchHtml(item.url, { referer: rankingResponse.url });
       assertNotAgeCheck(detailResponse.html, detailResponse.url);
       const detail = parseProductDetail(detailResponse.html, detailResponse.url, item.title);
-      const slug = slugify(item.title);
       const productId =
         extractProductId(detail.url) ||
         extractProductId(detail.thumbnailUrl) ||
         extractProductId(item.url);
+
+      if (earlyDuplicate) {
+        const updateInput = buildExistingArticleUpdate(earlyExistingArticle, detail, productId);
+        if (updateInput) {
+          summary.updated += 1;
+          if (dryRun) {
+            console.log(
+              `[dmm-ranking] update(dry-run) #${item.rank} ${item.title} -> ${updateInput.slug}`
+            );
+          } else {
+            const saved = await saveArticle(updateInput);
+            addArticleToIndex(existing, saved.metadata);
+            console.log(`[dmm-ranking] updated #${item.rank} ${item.title} -> ${saved.file_path}`);
+          }
+        } else {
+          summary.skipped += 1;
+          console.log(
+            `[dmm-ranking] skip #${item.rank} ${item.title} (${earlyDuplicate.reason}: ${earlyDuplicate.value})`
+          );
+        }
+        continue;
+      }
 
       const duplicate = findDuplicate(existing, {
         title: item.title,
@@ -77,10 +101,25 @@ async function main() {
       });
 
       if (duplicate) {
-        summary.skipped += 1;
-        console.log(
-          `[dmm-ranking] skip #${item.rank} ${item.title} (${duplicate.reason}: ${duplicate.value})`
-        );
+        const duplicateArticle = await readExistingArticle(duplicate.value);
+        const updateInput = buildExistingArticleUpdate(duplicateArticle, detail, productId);
+        if (updateInput) {
+          summary.updated += 1;
+          if (dryRun) {
+            console.log(
+              `[dmm-ranking] update(dry-run) #${item.rank} ${item.title} -> ${updateInput.slug}`
+            );
+          } else {
+            const saved = await saveArticle(updateInput);
+            addArticleToIndex(existing, saved.metadata);
+            console.log(`[dmm-ranking] updated #${item.rank} ${item.title} -> ${saved.file_path}`);
+          }
+        } else {
+          summary.skipped += 1;
+          console.log(
+            `[dmm-ranking] skip #${item.rank} ${item.title} (${duplicate.reason}: ${duplicate.value})`
+          );
+        }
         continue;
       }
 
@@ -91,7 +130,7 @@ async function main() {
         article_type: "review",
         source_type: "dmm_ranking_h24",
         published_at: now,
-        excerpt: "",
+        excerpt: detail.workComment,
         seo_title: "",
         product_title: item.title,
         circle_name: item.circleName,
@@ -125,7 +164,7 @@ async function main() {
   }
 
   console.log(
-    `[dmm-ranking] done seen=${summary.seen} created=${summary.created} skipped=${summary.skipped} failed=${summary.failed}`
+    `[dmm-ranking] done seen=${summary.seen} created=${summary.created} updated=${summary.updated} skipped=${summary.skipped} failed=${summary.failed}`
   );
 
   if (summary.failed > 0) {
@@ -231,6 +270,35 @@ function findDuplicate(index, candidate) {
   return null;
 }
 
+async function readExistingArticle(slug) {
+  if (!slug) return null;
+  try {
+    return await readArticle(slug);
+  } catch {
+    return null;
+  }
+}
+
+function hasExcerpt(article) {
+  return Boolean(String(article?.metadata?.excerpt || "").trim());
+}
+
+function buildExistingArticleUpdate(article, detail, productId) {
+  if (!article || hasExcerpt(article) || !detail.workComment) return null;
+  const metadata = article.metadata || {};
+  return {
+    ...metadata,
+    old_slug: metadata.slug,
+    excerpt: detail.workComment,
+    source_url: metadata.source_url || detail.url,
+    affiliate_url: metadata.affiliate_url || detail.url,
+    thumbnail_url: metadata.thumbnail_url || detail.thumbnailUrl,
+    genres: metadata.genres?.length ? metadata.genres : detail.genres,
+    body: article.body || "",
+    product_id: productId || metadata.product_id || "",
+  };
+}
+
 async function fetchHtml(url, options = {}) {
   const response = await fetch(url, {
     redirect: "follow",
@@ -326,8 +394,29 @@ function parseProductDetail(html, url, fallbackTitle) {
   return {
     url,
     genres,
+    workComment: extractWorkComment(html),
     thumbnailUrl: extractThumbnailUrl(html, url, fallbackTitle),
   };
+}
+
+function extractWorkComment(html) {
+  const headingRe = /<h3\b([^>]*)>([\s\S]*?)<\/h3>/giu;
+  for (const heading of html.matchAll(headingRe)) {
+    if (!hasClass(heading[1], "summary__ttl")) continue;
+    if (normalizeKey(textContent(heading[2])) !== normalizeKey("作品コメント")) continue;
+
+    const afterHeading = html.slice(heading.index + heading[0].length, heading.index + heading[0].length + 50000);
+    const openTagRe = /<([a-z][a-z0-9:-]*)\b([^>]*)>/giu;
+    for (const block of afterHeading.matchAll(openTagRe)) {
+      if (!hasClass(block[2], "summary__txt")) continue;
+      const rest = afterHeading.slice(block.index + block[0].length);
+      const closeTagRe = new RegExp(`<\\/\\s*${escapeRegExp(block[1])}\\s*>`, "iu");
+      const closeTag = rest.match(closeTagRe);
+      return blockTextContent(closeTag ? rest.slice(0, closeTag.index) : rest);
+    }
+  }
+
+  return "";
 }
 
 function extractThumbnailUrl(html, baseUrl, title) {
@@ -379,9 +468,30 @@ function getAttr(attrs, name) {
   return match ? match[2] : "";
 }
 
+function hasClass(attrs, className) {
+  return getAttr(attrs, "class")
+    .split(/[\s\u00a0]+/u)
+    .includes(className);
+}
+
 function textContent(value) {
   return decodeEntities(String(value || "").replace(/<[^>]+>/gu, " "))
     .replace(/[\s\u00a0]+/gu, " ")
+    .trim();
+}
+
+function blockTextContent(value) {
+  return decodeEntities(
+    String(value || "")
+      .replace(/<\s*br\b[^>]*>/giu, "\n")
+      .replace(/<\/\s*(?:p|div|li|h[1-6]|tr)\s*>/giu, "\n")
+      .replace(/<[^>]+>/gu, "")
+  )
+    .replace(/\r\n?/gu, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[\t\f\v \u00a0]+/gu, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/gu, "\n\n")
     .trim();
 }
 

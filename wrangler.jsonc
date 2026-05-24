@@ -20,7 +20,7 @@
   },
   "vars": {
     "BLOG_CMS_USER": "admin",
-    "DMM_RANKING_LIMIT": "20",
+    "DMM_RANKING_LIMIT": "100",
     "DMM_RANKING_URL": "https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=popular/term=h24/"
   },
   "observability": {
