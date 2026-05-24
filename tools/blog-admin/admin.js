@@ -429,14 +429,25 @@ function updatePreviewAndChecks() {
       : `<img src="${escapeHtml(fields.thumbnail_url.value)}" alt="">`
     : "";
   $("previewPane").innerHTML = `
-    <h1>${escapeHtml(fields.title.value || "タイトル未入力")}</h1>
-    ${fields.excerpt.value ? `<p>${escapeHtml(fields.excerpt.value)}</p>` : ""}
+    <h1>${escapeBreakableText(fields.title.value || "タイトル未入力")}</h1>
     ${fields.circle_name.value || fields.author_name.value ? `<p class="work-meta">${escapeHtml([fields.circle_name.value, fields.author_name.value].filter(Boolean).join(" / "))}</p>` : ""}
     ${thumbnail}
+    ${renderWorkComment(fields.excerpt.value)}
     ${markdownToHtml(fields.body.value, { imageLinkUrl: productLink })}
   `;
   $("writingStats").textContent = `${fields.body.value.length}文字`;
   renderChecks();
+}
+
+function renderWorkComment(value) {
+  const comment = String(value || "").trim();
+  if (!comment) return "";
+  return `
+    <section class="work-comment">
+      <h2>作品コメント</h2>
+      <p>${escapeHtml(comment)}</p>
+    </section>
+  `;
 }
 
 function renderChecks() {
@@ -668,6 +679,10 @@ function escapeHtml(value) {
     .replace(/>/gu, "&gt;")
     .replace(/"/gu, "&quot;")
     .replace(/'/gu, "&#039;");
+}
+
+function escapeBreakableText(value) {
+  return [...String(value ?? "")].map((character) => escapeHtml(character)).join("<wbr>");
 }
 
 let toastTimer = 0;

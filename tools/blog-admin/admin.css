@@ -536,8 +536,13 @@ textarea:focus {
 .site-header h1 {
   font-size: clamp(28px, 5vw, 46px);
   letter-spacing: 0;
+  max-width: 100%;
   line-height: 1.15;
   margin: 6px 0 8px;
+  line-break: anywhere;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  word-break: break-all;
 }
 
 .post-grid {
@@ -603,6 +608,18 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
+.post-excerpt {
+  color: #3d474d;
+  display: -webkit-box;
+  font-size: 14px;
+  line-height: 1.65;
+  margin: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  white-space: pre-line;
+}
+
 .post-card a,
 .article-shell a {
   color: var(--blue);
@@ -619,14 +636,67 @@ textarea:focus {
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 10px;
+  min-width: 0;
 }
 
 .article-shell {
-  max-width: 840px;
+  max-width: 900px;
 }
 
 .article-body {
-  font-size: 17px;
+  font-size: 16px;
+  line-height: 1.8;
+  margin-top: 28px;
+}
+
+.article-body:empty {
+  display: none;
+}
+
+.article-shell .hero-image {
+  max-height: 760px;
+  object-fit: contain;
+}
+
+.article-shell > article > .hero-image {
+  margin: 18px auto 0;
+  max-width: min(520px, 100%);
+  width: min(520px, 100%);
+}
+
+.article-shell .hero-link {
+  margin: 18px auto 0;
+  max-width: min(520px, 100%);
+  width: min(520px, 100%);
+}
+
+.article-shell .hero-link .hero-image {
+  width: 100%;
+}
+
+.work-comment {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 24px 0 0;
+  padding: 18px 20px;
+}
+
+.work-comment h2 {
+  border-bottom: 1px solid var(--line);
+  font-size: 20px;
+  line-height: 1.35;
+  margin: 0 0 16px;
+  padding-bottom: 10px;
+}
+
+.work-comment p {
+  color: #253036;
+  font-size: 16px;
+  line-height: 1.9;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .breadcrumbs {
@@ -743,6 +813,10 @@ textarea:focus {
   text-decoration: none;
 }
 
+.cta {
+  margin: 24px 0 0;
+}
+
 @media (max-width: 1100px) {
   .app-shell {
     grid-template-columns: 280px minmax(0, 1fr);
@@ -806,6 +880,10 @@ textarea:focus {
 
   .post-card h2 {
     font-size: 18px;
+  }
+
+  .post-excerpt {
+    -webkit-line-clamp: 3;
   }
 
   .post-grid {

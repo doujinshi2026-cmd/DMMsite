@@ -489,7 +489,7 @@ function blockTextContent(value) {
   )
     .replace(/\r\n?/gu, "\n")
     .split("\n")
-    .map((line) => line.replace(/[\t\f\v \u00a0]+/gu, " ").trim())
+    .map((line) => (line.trim() ? line.replace(/[\t\f\v\u00a0]/gu, " ").trimEnd() : ""))
     .join("\n")
     .replace(/\n{3,}/gu, "\n\n")
     .trim();

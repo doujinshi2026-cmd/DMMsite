@@ -356,9 +356,9 @@ function renderSiteIndex(articles, context = {}) {
           ${article.thumbnail_url ? `<a class="post-image-link" href="/site/posts/${encodeURIComponent(article.slug)}"><img src="${escapeHtml(article.thumbnail_url)}" alt=""></a>` : ""}
           <div>
             <p class="meta">${escapeHtml(article.status)} / ${escapeHtml(article.article_type || "review")}</p>
-            <h2><a href="/site/posts/${encodeURIComponent(article.slug)}">${escapeHtml(article.title)}</a></h2>
+            <h2><a href="/site/posts/${encodeURIComponent(article.slug)}">${escapeBreakableText(article.title)}</a></h2>
             ${circleLink || authorLink ? `<p class="work-meta">${circleLink}${circleLink && authorLink ? " / " : ""}${authorLink}</p>` : ""}
-            <p>${escapeHtml(article.excerpt || "本文の抜粋はまだありません。")}</p>
+            <p class="post-excerpt">${escapeHtml(article.excerpt || "本文の抜粋はまだありません。")}</p>
             <div class="tags">${labels}</div>
           </div>
         </article>
@@ -443,17 +443,28 @@ function renderArticlePage(article, options = {}) {
       <article>
         <header class="site-header">
           <p>18歳未満閲覧禁止 / ${escapeHtml(metadata.pr_label || "PR")}</p>
-          <h1>${escapeHtml(metadata.title)}</h1>
-          <p>${escapeHtml(metadata.excerpt || "")}</p>
+          <h1>${escapeBreakableText(metadata.title)}</h1>
           ${circleLink || authorLink ? `<p class="work-meta">${circleLink}${circleLink && authorLink ? " / " : ""}${authorLink}</p>` : ""}
           <div class="tags">${labels}</div>
         </header>
         ${heroImage}
+        ${renderWorkComment(metadata.excerpt)}
         <div class="article-body">${body}</div>
         ${productLink ? `<p class="cta"><a href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer">作品ページを確認する</a></p>` : ""}
       </article>
     </main>
   `);
+}
+
+function renderWorkComment(value) {
+  const comment = String(value || "").trim();
+  if (!comment) return "";
+  return `
+        <section class="work-comment">
+          <h2>作品コメント</h2>
+          <p>${escapeHtml(comment)}</p>
+        </section>
+  `;
 }
 
 function articleMatchesFilters(article, filters) {
@@ -596,4 +607,8 @@ function escapeHtml(value) {
     .replace(/>/gu, "&gt;")
     .replace(/"/gu, "&quot;")
     .replace(/'/gu, "&#039;");
+}
+
+function escapeBreakableText(value) {
+  return [...String(value ?? "")].map((character) => escapeHtml(character)).join("<wbr>");
 }
