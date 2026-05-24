@@ -16,7 +16,9 @@
     "cf:d1:init:remote": "npm run cf:config && npx wrangler d1 execute dmmsite-db --remote --file=database/d1-schema.sql",
     "cf:d1:seed": "node scripts/export-posts-to-d1-seed.mjs",
     "cf:d1:seed:local": "npm run cf:d1:seed && npx wrangler d1 execute dmmsite-db --local --file=database/d1-seed.sql",
-    "cf:d1:seed:remote": "npm run cf:config && npm run cf:d1:seed && npx wrangler d1 execute dmmsite-db --remote --file=database/d1-seed.sql"
+    "cf:d1:seed:remote": "npm run cf:config && npm run cf:d1:seed && npx wrangler d1 execute dmmsite-db --remote --file=database/d1-seed.sql",
+    "cf:dmm:import": "node scripts/call-cloudflare-dmm-import.mjs",
+    "cf:dmm:import:dry": "node scripts/call-cloudflare-dmm-import.mjs --dry-run"
   },
   "devDependencies": {
     "wrangler": "^4.94.0"
