@@ -39,7 +39,12 @@ async function route(request, env) {
     return Response.redirect(`${url.origin}/site`, 302);
   }
 
-  if (pathname === "/admin" || pathname === "/admin/" || pathname === "/admin/index.html") {
+  if (
+    pathname === "/admin" ||
+    pathname === "/admin/" ||
+    pathname === "/admin/index.html" ||
+    pathname === "/index.html"
+  ) {
     const unauthorized = await requireAdmin(request, env);
     if (unauthorized) return unauthorized;
     return adminAssetResponse(env, request, "/index.html");
