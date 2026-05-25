@@ -1,7 +1,7 @@
 import { listArticles, readArticle, saveArticle, slugify } from "../lib/content-store.mjs";
 
 const DEFAULT_RANKING_URL =
-  "https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=popular/term=h24/";
+  "https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=sales/term=h24/";
 const DEFAULT_LIMIT = 100;
 const REQUEST_TIMEOUT_MS = 30000;
 const USER_AGENT =
@@ -53,7 +53,7 @@ async function main() {
     });
     const earlyExistingArticle = earlyDuplicate ? await readExistingArticle(earlyDuplicate.value) : null;
 
-    if (earlyDuplicate && hasExcerpt(earlyExistingArticle)) {
+    if (earlyDuplicate && hasImportDetails(earlyExistingArticle)) {
       summary.skipped += 1;
       console.log(
         `[dmm-ranking] skip #${item.rank} ${item.title} (${earlyDuplicate.reason}: ${earlyDuplicate.value})`
@@ -279,24 +279,50 @@ async function readExistingArticle(slug) {
   }
 }
 
-function hasExcerpt(article) {
-  return Boolean(String(article?.metadata?.excerpt || "").trim());
+function hasImportDetails(article) {
+  const metadata = article?.metadata || {};
+  return Boolean(
+    String(metadata.excerpt || "").trim() &&
+      String(metadata.thumbnail_url || "").trim() &&
+      (metadata.genres || []).length
+  );
 }
 
 function buildExistingArticleUpdate(article, detail, productId) {
-  if (!article || hasExcerpt(article) || !detail.workComment) return null;
+  if (!article) return null;
   const metadata = article.metadata || {};
+  const currentGenres = metadata.genres || [];
+  const nextExcerpt = metadata.excerpt || detail.workComment || "";
+  const nextSourceUrl = metadata.source_url || detail.url || "";
+  const nextAffiliateUrl = metadata.affiliate_url || detail.url || "";
+  const nextThumbnailUrl = metadata.thumbnail_url || detail.thumbnailUrl || "";
+  const nextGenres = currentGenres.length ? currentGenres : detail.genres || [];
+
+  const hasChanges =
+    nextExcerpt !== (metadata.excerpt || "") ||
+    nextSourceUrl !== (metadata.source_url || "") ||
+    nextAffiliateUrl !== (metadata.affiliate_url || "") ||
+    nextThumbnailUrl !== (metadata.thumbnail_url || "") ||
+    !arraysEqual(nextGenres, currentGenres);
+
+  if (!hasChanges) return null;
+
   return {
     ...metadata,
     old_slug: metadata.slug,
-    excerpt: detail.workComment,
-    source_url: metadata.source_url || detail.url,
-    affiliate_url: metadata.affiliate_url || detail.url,
-    thumbnail_url: metadata.thumbnail_url || detail.thumbnailUrl,
-    genres: metadata.genres?.length ? metadata.genres : detail.genres,
+    excerpt: nextExcerpt,
+    source_url: nextSourceUrl,
+    affiliate_url: nextAffiliateUrl,
+    thumbnail_url: nextThumbnailUrl,
+    genres: nextGenres,
     body: article.body || "",
     product_id: productId || metadata.product_id || "",
   };
+}
+
+function arraysEqual(left, right) {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
 }
 
 async function fetchHtml(url, options = {}) {
@@ -348,7 +374,7 @@ function decodeHtml(buffer, contentType) {
 function assertNotAgeCheck(html, url) {
   if (
     /age_check|18歳未満|18\s*years\s*old|Are you at least 18/i.test(html) &&
-    !/\brank-name\b|\bc_icon_detailGenreTag\b/i.test(html)
+    !/\brank-name\b|\bc_icon_detailGenreTag\b|\bgenreTag__txt\b/i.test(html)
   ) {
     throw new Error(`DMM age check page was returned: ${url}`);
   }
@@ -384,12 +410,20 @@ function parseRankingItems(html, baseUrl) {
 }
 
 function parseProductDetail(html, url, fallbackTitle) {
-  const genres = unique(
+  const legacyGenres = unique(
     [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/giu)]
       .filter((match) => /\bclass\s*=\s*["'][^"']*\bc_icon_detailGenreTag\b[^"']*["']/iu.test(match[1]))
       .map((match) => textContent(match[2]))
       .filter(Boolean)
   );
+  const genreBlock = extractInformationListBlock(html, "ジャンル");
+  const currentGenres = genreBlock
+    ? [...genreBlock.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/giu)]
+        .filter((match) => hasClass(match[1], "genreTag__txt") || /article=keyword/iu.test(getAttr(match[1], "href")))
+        .map((match) => textContent(match[2]))
+        .filter(Boolean)
+    : [];
+  const genres = unique([...currentGenres, ...legacyGenres]);
 
   return {
     url,
@@ -397,6 +431,24 @@ function parseProductDetail(html, url, fallbackTitle) {
     workComment: extractWorkComment(html),
     thumbnailUrl: extractThumbnailUrl(html, url, fallbackTitle),
   };
+}
+
+function extractInformationListBlock(html, label) {
+  const titleRe = /<dt\b([^>]*)>([\s\S]*?)<\/dt>/giu;
+  for (const title of html.matchAll(titleRe)) {
+    if (!hasClass(title[1], "informationList__ttl")) continue;
+    if (normalizeKey(textContent(title[2])) !== normalizeKey(label)) continue;
+
+    const afterTitle = html.slice(title.index + title[0].length, title.index + title[0].length + 50000);
+    const itemOpen = afterTitle.match(/<dd\b([^>]*)>/iu);
+    if (!itemOpen) return "";
+
+    const itemBody = afterTitle.slice(itemOpen.index + itemOpen[0].length);
+    const itemClose = itemBody.match(/<\/dd>/iu);
+    return itemClose ? itemBody.slice(0, itemClose.index) : itemBody;
+  }
+
+  return "";
 }
 
 function extractWorkComment(html) {

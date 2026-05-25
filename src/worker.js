@@ -1,5 +1,5 @@
 const DEFAULT_RANKING_URL =
-  "https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=popular/term=h24/";
+  "https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=sales/term=h24/";
 const DEFAULT_RANKING_LIMIT = 100;
 const REQUEST_TIMEOUT_MS = 30000;
 const USER_AGENT =
@@ -134,6 +134,13 @@ async function routeApi(request, env, pathname, url) {
     const dryRun = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dry_run") === "1";
     const limit = positiveInteger(url.searchParams.get("limit"), env.DMM_RANKING_LIMIT);
     const result = await importDmmRanking(env, { dryRun, limit, manual: true });
+    return sendJson(result);
+  }
+
+  if ((request.method === "GET" || request.method === "POST") && pathname === "/api/dmm/backfill") {
+    const dryRun = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dry_run") === "1";
+    const limit = positiveInteger(url.searchParams.get("limit"), env.DMM_RANKING_LIMIT);
+    const result = await backfillDmmDetails(env, { dryRun, limit });
     return sendJson(result);
   }
 
@@ -446,7 +453,7 @@ async function importDmmRanking(env, options = {}) {
     });
     const earlyExistingArticle = earlyDuplicate ? await readArticle(env, earlyDuplicate.slug) : null;
 
-    if (earlyDuplicate && hasExcerpt(earlyExistingArticle)) {
+    if (earlyDuplicate && hasImportDetails(earlyExistingArticle)) {
       summary.skipped += 1;
       summary.items.push({ rank: item.rank, title: item.title, status: "skipped", duplicate: earlyDuplicate.slug });
       continue;
@@ -563,24 +570,123 @@ async function importDmmRanking(env, options = {}) {
   return summary;
 }
 
-function hasExcerpt(article) {
-  return Boolean(String(article?.metadata?.excerpt || "").trim());
+function hasImportDetails(article) {
+  const metadata = article?.metadata || {};
+  return Boolean(
+    String(metadata.excerpt || "").trim() &&
+      String(metadata.thumbnail_url || "").trim() &&
+      (metadata.genres || []).length
+  );
 }
 
 function buildExistingArticleUpdate(article, detail, productId) {
-  if (!article || hasExcerpt(article) || !detail.workComment) return null;
+  if (!article) return null;
   const metadata = article.metadata || {};
+  const currentGenres = metadata.genres || [];
+  const nextExcerpt = metadata.excerpt || detail.workComment || "";
+  const nextSourceUrl = metadata.source_url || detail.url || "";
+  const nextAffiliateUrl = metadata.affiliate_url || detail.url || "";
+  const nextThumbnailUrl = metadata.thumbnail_url || detail.thumbnailUrl || "";
+  const nextGenres = currentGenres.length ? currentGenres : detail.genres || [];
+
+  const hasChanges =
+    nextExcerpt !== (metadata.excerpt || "") ||
+    nextSourceUrl !== (metadata.source_url || "") ||
+    nextAffiliateUrl !== (metadata.affiliate_url || "") ||
+    nextThumbnailUrl !== (metadata.thumbnail_url || "") ||
+    !arraysEqual(nextGenres, currentGenres);
+
+  if (!hasChanges) return null;
+
   return {
     ...metadata,
     old_slug: metadata.slug,
-    excerpt: detail.workComment,
-    source_url: metadata.source_url || detail.url,
-    affiliate_url: metadata.affiliate_url || detail.url,
-    thumbnail_url: metadata.thumbnail_url || detail.thumbnailUrl,
-    genres: metadata.genres?.length ? metadata.genres : detail.genres,
+    excerpt: nextExcerpt,
+    source_url: nextSourceUrl,
+    affiliate_url: nextAffiliateUrl,
+    thumbnail_url: nextThumbnailUrl,
+    genres: nextGenres,
     body: article.body || "",
     product_id: productId || metadata.product_id || "",
   };
+}
+
+function arraysEqual(left, right) {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
+async function backfillDmmDetails(env, options = {}) {
+  const dryRun = Boolean(options.dryRun);
+  const limit = positiveInteger(options.limit, DEFAULT_RANKING_LIMIT);
+  const summary = {
+    dryRun,
+    limit,
+    seen: 0,
+    updated: 0,
+    skipped: 0,
+    failed: 0,
+    items: [],
+  };
+
+  const candidates = (await listArticles(env))
+    .filter((metadata) => !hasImportDetails({ metadata }))
+    .filter((metadata) => isDmmUrl(metadata.source_url || metadata.affiliate_url))
+    .slice(0, limit);
+
+  summary.seen = candidates.length;
+
+  for (const metadata of candidates) {
+    try {
+      const article = await readArticle(env, metadata.slug);
+      const detailUrl = article.metadata.source_url || article.metadata.affiliate_url;
+      const detailResponse = await fetchHtml(detailUrl);
+      assertNotAgeCheck(detailResponse.html, detailResponse.url);
+      const detail = parseProductDetail(detailResponse.html, detailResponse.url, article.metadata.title);
+      const productId =
+        extractProductId(detail.url) ||
+        extractProductId(detail.thumbnailUrl) ||
+        extractProductId(detailUrl) ||
+        null;
+      const updateInput = buildExistingArticleUpdate(article, detail, productId);
+
+      if (!updateInput) {
+        summary.skipped += 1;
+        summary.items.push({ slug: metadata.slug, status: "skipped" });
+        continue;
+      }
+
+      if (!dryRun) {
+        await saveArticle(env, updateInput);
+      }
+
+      summary.updated += 1;
+      summary.items.push({
+        slug: updateInput.slug,
+        status: dryRun ? "update-dry-run" : "updated",
+        genres: (updateInput.genres || []).length,
+      });
+    } catch (error) {
+      summary.failed += 1;
+      summary.items.push({ slug: metadata.slug, status: "failed", error: error.message });
+    }
+  }
+
+  return summary;
+}
+
+function isDmmUrl(value) {
+  try {
+    const hostname = new URL(value).hostname.toLowerCase();
+    return (
+      hostname === "dmm.co.jp" ||
+      hostname.endsWith(".dmm.co.jp") ||
+      hostname === "dmm.com" ||
+      hostname.endsWith(".dmm.com")
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function findDuplicateArticle(env, candidate) {
@@ -663,7 +769,7 @@ function decodeHtml(arrayBuffer, contentType) {
 function assertNotAgeCheck(html, url) {
   if (
     /age_check|18歳未満|18\s*years\s*old|Are you at least 18/i.test(html) &&
-    !/\brank-name\b|\bc_icon_detailGenreTag\b/i.test(html)
+    !/\brank-name\b|\bc_icon_detailGenreTag\b|\bgenreTag__txt\b/i.test(html)
   ) {
     throw new Error(`DMM age check page was returned: ${url}`);
   }
@@ -699,12 +805,20 @@ function parseRankingItems(html, baseUrl) {
 }
 
 function parseProductDetail(html, url, fallbackTitle) {
-  const genres = unique(
+  const legacyGenres = unique(
     [...html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/giu)]
       .filter((match) => /\bclass\s*=\s*["'][^"']*\bc_icon_detailGenreTag\b[^"']*["']/iu.test(match[1]))
       .map((match) => textContent(match[2]))
       .filter(Boolean)
   );
+  const genreBlock = extractInformationListBlock(html, "ジャンル");
+  const currentGenres = genreBlock
+    ? [...genreBlock.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/giu)]
+        .filter((match) => hasClass(match[1], "genreTag__txt") || /article=keyword/iu.test(getAttr(match[1], "href")))
+        .map((match) => textContent(match[2]))
+        .filter(Boolean)
+    : [];
+  const genres = unique([...currentGenres, ...legacyGenres]);
 
   return {
     url,
@@ -712,6 +826,24 @@ function parseProductDetail(html, url, fallbackTitle) {
     workComment: extractWorkComment(html),
     thumbnailUrl: extractThumbnailUrl(html, url, fallbackTitle),
   };
+}
+
+function extractInformationListBlock(html, label) {
+  const titleRe = /<dt\b([^>]*)>([\s\S]*?)<\/dt>/giu;
+  for (const title of html.matchAll(titleRe)) {
+    if (!hasClass(title[1], "informationList__ttl")) continue;
+    if (normalizeKey(textContent(title[2])) !== normalizeKey(label)) continue;
+
+    const afterTitle = html.slice(title.index + title[0].length, title.index + title[0].length + 50000);
+    const itemOpen = afterTitle.match(/<dd\b([^>]*)>/iu);
+    if (!itemOpen) return "";
+
+    const itemBody = afterTitle.slice(itemOpen.index + itemOpen[0].length);
+    const itemClose = itemBody.match(/<\/dd>/iu);
+    return itemClose ? itemBody.slice(0, itemClose.index) : itemBody;
+  }
+
+  return "";
 }
 
 function extractWorkComment(html) {

@@ -104,7 +104,7 @@ npm run dmm:import:dry
 
 取り込み内容:
 
-- 対象URL: `https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=popular/term=h24/`
+- 対象URL: `https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=sales/term=h24/`
 - 対象順位: 上位100件
 - 重複判定: `cid=d_...`、slug、元ページURL、作品名
 - 状態: `published`
