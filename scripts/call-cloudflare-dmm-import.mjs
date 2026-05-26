@@ -54,6 +54,7 @@ if (!response.ok) {
 function summarize(payload) {
   return {
     seen: payload.seen,
+    ranking_pages: payload.ranking_pages,
     created: payload.created,
     updated: payload.updated,
     skipped: payload.skipped,

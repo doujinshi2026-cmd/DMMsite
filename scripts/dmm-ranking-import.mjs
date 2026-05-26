@@ -37,16 +37,17 @@ async function main() {
   console.log(`[dmm-ranking] detail-limit ${detailLimit} delay-ms ${delayMs}`);
 
   const existing = await buildExistingIndex();
-  const rankingResponse = await fetchHtml(rankingUrl);
-  assertNotAgeCheck(rankingResponse.html, rankingResponse.url);
-
-  const rankingItems = parseRankingItems(rankingResponse.html, rankingResponse.url).slice(0, limit);
+  const rankingResult = await fetchRankingItems(rankingUrl, limit, delayMs);
+  const rankingItems = rankingResult.items;
   if (!rankingItems.length) {
     throw new Error("ranking items were not found. DMM markup may have changed.");
   }
 
+  console.log(`[dmm-ranking] ranking-pages ${rankingResult.pages} seen ${rankingItems.length}`);
+
   const summary = {
     seen: rankingItems.length,
+    rankingPages: rankingResult.pages,
     created: 0,
     updated: 0,
     skipped: 0,
@@ -85,7 +86,7 @@ async function main() {
       detailRequests += 1;
       summary.detailRequests = detailRequests;
 
-      const detailResponse = await fetchHtml(item.url, { referer: rankingResponse.url });
+      const detailResponse = await fetchHtml(item.url, { referer: rankingResult.url });
       assertNotAgeCheck(detailResponse.html, detailResponse.url);
       const detail = parseProductDetail(detailResponse.html, detailResponse.url, item.title);
       const productId =
@@ -187,7 +188,7 @@ async function main() {
   }
 
   console.log(
-    `[dmm-ranking] done seen=${summary.seen} detail_requests=${summary.detailRequests} created=${summary.created} updated=${summary.updated} skipped=${summary.skipped} deferred=${summary.deferred} failed=${summary.failed}`
+    `[dmm-ranking] done seen=${summary.seen} ranking_pages=${summary.rankingPages} detail_requests=${summary.detailRequests} created=${summary.created} updated=${summary.updated} skipped=${summary.skipped} deferred=${summary.deferred} failed=${summary.failed}`
   );
 
   if (summary.failed > 0) {
@@ -252,6 +253,60 @@ async function waitBeforeDetailRequest(previousRequests, delayMs) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchRankingItems(rankingUrl, limit, delayMs) {
+  const items = [];
+  const seen = new Set();
+  let canonicalUrl = rankingUrl;
+  let pages = 0;
+  const maxPages = Math.max(1, Math.ceil(limit / 20) + 2);
+
+  for (let page = 1; items.length < limit && page <= maxPages; page += 1) {
+    if (page > 1 && delayMs > 0) {
+      await sleep(delayMs);
+    }
+
+    const pageUrl = page === 1 ? rankingUrl : rankingPageUrl(rankingUrl, page);
+    const response = await fetchHtml(pageUrl, { referer: canonicalUrl });
+    pages += 1;
+    if (page === 1) canonicalUrl = response.url;
+    assertNotAgeCheck(response.html, response.url);
+
+    const pageItems = parseRankingItems(response.html, response.url);
+    if (!pageItems.length) break;
+
+    let added = 0;
+    for (const item of pageItems) {
+      const key = normalizeUrlKey(item.url) || normalizeKey(`${item.title}|${item.circleName}`);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({ ...item, rank: items.length + 1 });
+      added += 1;
+      if (items.length >= limit) break;
+    }
+
+    if (!added || pageItems.length < 20) break;
+  }
+
+  return { url: canonicalUrl, pages, items };
+}
+
+function rankingPageUrl(value, page) {
+  try {
+    const url = new URL(value);
+    const pageSegment = `page=${page}`;
+    if (/\/page=\d+(?=\/|$)/u.test(url.pathname)) {
+      url.pathname = url.pathname.replace(/\/page=\d+(?=\/|$)/u, `/${pageSegment}`);
+    } else {
+      url.pathname = url.pathname.endsWith("/")
+        ? `${url.pathname}${pageSegment}/`
+        : `${url.pathname}/${pageSegment}/`;
+    }
+    return url.href;
+  } catch {
+    return value;
+  }
 }
 
 async function buildExistingIndex() {
