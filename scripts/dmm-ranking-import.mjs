@@ -3,6 +3,9 @@ import { listArticles, readArticle, saveArticle, slugify } from "../lib/content-
 const DEFAULT_RANKING_URL =
   "https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=sales/term=h24/";
 const DEFAULT_LIMIT = 100;
+const DEFAULT_DETAIL_LIMIT = 50;
+const DEFAULT_REQUEST_DELAY_MS = 750;
+const MAX_REQUEST_DELAY_MS = 5000;
 const REQUEST_TIMEOUT_MS = 30000;
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -18,12 +21,20 @@ main().catch((error) => {
 async function main() {
   const rankingUrl = args.url || DEFAULT_RANKING_URL;
   const limit = positiveInteger(args.limit, DEFAULT_LIMIT);
+  const detailLimit = positiveInteger(args.detailLimit, DEFAULT_DETAIL_LIMIT);
+  const delayMs = boundedNonNegativeInteger(
+    args.delayMs,
+    DEFAULT_REQUEST_DELAY_MS,
+    MAX_REQUEST_DELAY_MS
+  );
   const dryRun = Boolean(args.dryRun);
   const now = new Date().toISOString();
+  let detailRequests = 0;
 
   console.log(`[dmm-ranking] start ${now}`);
   console.log(`[dmm-ranking] url ${rankingUrl}`);
   console.log(`[dmm-ranking] limit ${limit}${dryRun ? " dry-run" : ""}`);
+  console.log(`[dmm-ranking] detail-limit ${detailLimit} delay-ms ${delayMs}`);
 
   const existing = await buildExistingIndex();
   const rankingResponse = await fetchHtml(rankingUrl);
@@ -39,7 +50,9 @@ async function main() {
     created: 0,
     updated: 0,
     skipped: 0,
+    deferred: 0,
     failed: 0,
+    detailRequests: 0,
   };
 
   for (const item of rankingItems) {
@@ -61,7 +74,17 @@ async function main() {
       continue;
     }
 
+    if (detailRequests >= detailLimit) {
+      summary.deferred += 1;
+      console.log(`[dmm-ranking] defer #${item.rank} ${item.title} (detail-limit)`);
+      continue;
+    }
+
     try {
+      await waitBeforeDetailRequest(detailRequests, delayMs);
+      detailRequests += 1;
+      summary.detailRequests = detailRequests;
+
       const detailResponse = await fetchHtml(item.url, { referer: rankingResponse.url });
       assertNotAgeCheck(detailResponse.html, detailResponse.url);
       const detail = parseProductDetail(detailResponse.html, detailResponse.url, item.title);
@@ -164,7 +187,7 @@ async function main() {
   }
 
   console.log(
-    `[dmm-ranking] done seen=${summary.seen} created=${summary.created} updated=${summary.updated} skipped=${summary.skipped} failed=${summary.failed}`
+    `[dmm-ranking] done seen=${summary.seen} detail_requests=${summary.detailRequests} created=${summary.created} updated=${summary.updated} skipped=${summary.skipped} deferred=${summary.deferred} failed=${summary.failed}`
   );
 
   if (summary.failed > 0) {
@@ -190,6 +213,21 @@ function parseArgs(values) {
       index += 1;
       continue;
     }
+    if (
+      value === "--detail-limit" ||
+      value === "--detail_limit" ||
+      value === "--batch-size" ||
+      value === "--batch_size"
+    ) {
+      parsed.detailLimit = values[index + 1] || "";
+      index += 1;
+      continue;
+    }
+    if (value === "--delay-ms" || value === "--delay_ms") {
+      parsed.delayMs = values[index + 1] || "";
+      index += 1;
+      continue;
+    }
   }
   return parsed;
 }
@@ -197,6 +235,23 @@ function parseArgs(values) {
 function positiveInteger(value, fallback) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : fallback;
+}
+
+function boundedNonNegativeInteger(value, fallback, max) {
+  const fallbackNumber = Number(fallback);
+  const number = Number(value);
+  const resolved = Number.isInteger(number) && number >= 0 ? number : fallbackNumber;
+  const safeValue = Number.isInteger(resolved) && resolved >= 0 ? resolved : 0;
+  return Math.min(safeValue, max);
+}
+
+async function waitBeforeDetailRequest(previousRequests, delayMs) {
+  if (previousRequests <= 0 || delayMs <= 0) return;
+  await sleep(delayMs);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function buildExistingIndex() {

@@ -11,6 +11,12 @@ await loadDotEnv(path.join(PROJECT_ROOT, ".env"));
 
 const dryRun = process.argv.includes("--dry-run");
 const limit = readArg("--limit");
+const detailLimit =
+  readArg("--detail-limit") ||
+  readArg("--detail_limit") ||
+  readArg("--batch-size") ||
+  readArg("--batch_size");
+const delayMs = readArg("--delay-ms") || readArg("--delay_ms");
 const baseUrl = String(process.env.CLOUDFLARE_WORKER_URL || DEFAULT_URL).replace(/\/$/u, "");
 const user = String(process.env.BLOG_CMS_USER || "admin");
 const password = String(process.env.BLOG_CMS_PASSWORD || "");
@@ -22,6 +28,8 @@ if (!password) {
 const search = new URLSearchParams();
 if (dryRun) search.set("dryRun", "1");
 if (limit) search.set("limit", limit);
+if (detailLimit) search.set("detailLimit", detailLimit);
+if (delayMs) search.set("delayMs", delayMs);
 const query = search.toString();
 const url = `${baseUrl}/api/dmm/import${query ? `?${query}` : ""}`;
 const response = await fetch(url, {
@@ -49,7 +57,11 @@ function summarize(payload) {
     created: payload.created,
     updated: payload.updated,
     skipped: payload.skipped,
+    deferred: payload.deferred,
     failed: payload.failed,
+    detail_limit: payload.detail_limit,
+    detail_requests: payload.detail_requests,
+    request_delay_ms: payload.request_delay_ms,
     dry_run: payload.dry_run,
     items: (payload.items || []).map((item) => ({
       rank: item.rank,

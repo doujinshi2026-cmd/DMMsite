@@ -1,6 +1,9 @@
 const DEFAULT_RANKING_URL =
   "https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=sales/term=h24/";
 const DEFAULT_RANKING_LIMIT = 100;
+const DEFAULT_RANKING_DETAIL_LIMIT = 50;
+const DEFAULT_REQUEST_DELAY_MS = 750;
+const MAX_REQUEST_DELAY_MS = 5000;
 const REQUEST_TIMEOUT_MS = 30000;
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -133,14 +136,31 @@ async function routeApi(request, env, pathname, url) {
   if ((request.method === "GET" || request.method === "POST") && pathname === "/api/dmm/import") {
     const dryRun = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dry_run") === "1";
     const limit = positiveInteger(url.searchParams.get("limit"), env.DMM_RANKING_LIMIT);
-    const result = await importDmmRanking(env, { dryRun, limit, manual: true });
+    const detailLimit = positiveInteger(
+      url.searchParams.get("detailLimit") ||
+        url.searchParams.get("detail_limit") ||
+        url.searchParams.get("batchSize") ||
+        url.searchParams.get("batch_size"),
+      env.DMM_RANKING_DETAIL_LIMIT || DEFAULT_RANKING_DETAIL_LIMIT
+    );
+    const delayMs = boundedNonNegativeInteger(
+      url.searchParams.get("delayMs") || url.searchParams.get("delay_ms"),
+      env.DMM_RANKING_REQUEST_DELAY_MS || DEFAULT_REQUEST_DELAY_MS,
+      MAX_REQUEST_DELAY_MS
+    );
+    const result = await importDmmRanking(env, { dryRun, limit, detailLimit, delayMs, manual: true });
     return sendJson(result);
   }
 
   if ((request.method === "GET" || request.method === "POST") && pathname === "/api/dmm/backfill") {
     const dryRun = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dry_run") === "1";
     const limit = positiveInteger(url.searchParams.get("limit"), env.DMM_RANKING_LIMIT);
-    const result = await backfillDmmDetails(env, { dryRun, limit });
+    const delayMs = boundedNonNegativeInteger(
+      url.searchParams.get("delayMs") || url.searchParams.get("delay_ms"),
+      env.DMM_RANKING_REQUEST_DELAY_MS || DEFAULT_REQUEST_DELAY_MS,
+      MAX_REQUEST_DELAY_MS
+    );
+    const result = await backfillDmmDetails(env, { dryRun, limit, delayMs });
     return sendJson(result);
   }
 
@@ -416,18 +436,32 @@ async function importDmmRanking(env, options = {}) {
   const startedAt = new Date(options.scheduledTime || Date.now()).toISOString();
   const rankingUrl = env.DMM_RANKING_URL || DEFAULT_RANKING_URL;
   const limit = positiveInteger(options.limit, env.DMM_RANKING_LIMIT || DEFAULT_RANKING_LIMIT);
+  const detailLimit = positiveInteger(
+    options.detailLimit,
+    env.DMM_RANKING_DETAIL_LIMIT || DEFAULT_RANKING_DETAIL_LIMIT
+  );
+  const delayMs = boundedNonNegativeInteger(
+    options.delayMs,
+    env.DMM_RANKING_REQUEST_DELAY_MS || DEFAULT_REQUEST_DELAY_MS,
+    MAX_REQUEST_DELAY_MS
+  );
   const dryRun = Boolean(options.dryRun);
+  let detailRequests = 0;
 
   const summary = {
     started_at: startedAt,
     cron: options.cron || "",
     ranking_url: rankingUrl,
     limit,
+    detail_limit: detailLimit,
+    detail_requests: 0,
+    request_delay_ms: delayMs,
     dry_run: dryRun,
     seen: 0,
     created: 0,
     updated: 0,
     skipped: 0,
+    deferred: 0,
     failed: 0,
     items: [],
   };
@@ -459,7 +493,22 @@ async function importDmmRanking(env, options = {}) {
       continue;
     }
 
+    if (detailRequests >= detailLimit) {
+      summary.deferred += 1;
+      summary.items.push({
+        rank: item.rank,
+        title: item.title,
+        status: "deferred",
+        reason: "detail-limit",
+      });
+      continue;
+    }
+
     try {
+      await waitBeforeDetailRequest(detailRequests, delayMs);
+      detailRequests += 1;
+      summary.detail_requests = detailRequests;
+
       const detailResponse = await fetchHtml(item.url, { referer: rankingResponse.url });
       assertNotAgeCheck(detailResponse.html, detailResponse.url);
       const detail = parseProductDetail(detailResponse.html, detailResponse.url, item.title);
@@ -560,9 +609,11 @@ async function importDmmRanking(env, options = {}) {
       level: summary.failed ? "warn" : "info",
       event: "dmm-ranking-import",
       seen: summary.seen,
+      detail_requests: summary.detail_requests,
       created: summary.created,
       updated: summary.updated,
       skipped: summary.skipped,
+      deferred: summary.deferred,
       failed: summary.failed,
     })
   );
@@ -619,9 +670,17 @@ function arraysEqual(left, right) {
 async function backfillDmmDetails(env, options = {}) {
   const dryRun = Boolean(options.dryRun);
   const limit = positiveInteger(options.limit, DEFAULT_RANKING_LIMIT);
+  const delayMs = boundedNonNegativeInteger(
+    options.delayMs,
+    env.DMM_RANKING_REQUEST_DELAY_MS || DEFAULT_REQUEST_DELAY_MS,
+    MAX_REQUEST_DELAY_MS
+  );
+  let detailRequests = 0;
   const summary = {
     dryRun,
     limit,
+    detail_requests: 0,
+    request_delay_ms: delayMs,
     seen: 0,
     updated: 0,
     skipped: 0,
@@ -640,6 +699,10 @@ async function backfillDmmDetails(env, options = {}) {
     try {
       const article = await readArticle(env, metadata.slug);
       const detailUrl = article.metadata.source_url || article.metadata.affiliate_url;
+      await waitBeforeDetailRequest(detailRequests, delayMs);
+      detailRequests += 1;
+      summary.detail_requests = detailRequests;
+
       const detailResponse = await fetchHtml(detailUrl);
       assertNotAgeCheck(detailResponse.html, detailResponse.url);
       const detail = parseProductDetail(detailResponse.html, detailResponse.url, article.metadata.title);
@@ -1432,6 +1495,23 @@ function unique(values) {
 function positiveInteger(value, fallback) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : Number(fallback) || DEFAULT_RANKING_LIMIT;
+}
+
+function boundedNonNegativeInteger(value, fallback, max) {
+  const fallbackNumber = Number(fallback);
+  const number = Number(value);
+  const resolved = Number.isInteger(number) && number >= 0 ? number : fallbackNumber;
+  const safeValue = Number.isInteger(resolved) && resolved >= 0 ? resolved : 0;
+  return Math.min(safeValue, max);
+}
+
+async function waitBeforeDetailRequest(previousRequests, delayMs) {
+  if (previousRequests <= 0 || delayMs <= 0) return;
+  await sleep(delayMs);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function escapeRegExp(value) {

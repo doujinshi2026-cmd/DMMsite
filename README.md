@@ -90,7 +90,8 @@ src/worker.js           Cloudflare Workers用の公開サイト/API/Cron
 
 ## DMMランキングから自動作成
 
-24時間人気ランキングの上位100件を取得し、未投稿の作品はレビュー記事として追加し、既存記事の抜粋が空なら作品コメントで補完できます。
+24時間人気ランキングの上位100件を候補として確認し、未投稿の作品はレビュー記事として追加し、既存記事の抜粋が空なら作品コメントで補完できます。
+制限対策として、作品詳細ページの取得は1回あたり最大50件に抑え、詳細ページ同士のリクエスト間に750msの待機を入れています。
 
 ```powershell
 npm run dmm:import
@@ -105,7 +106,9 @@ npm run dmm:import:dry
 取り込み内容:
 
 - 対象URL: `https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=sales/term=h24/`
-- 対象順位: 上位100件
+- 対象順位: 上位100件を候補として確認
+- 詳細取得: 未取得・情報不足の作品を1回あたり最大50件
+- 待機時間: 作品詳細ページの取得ごとに750ms
 - 重複判定: `cid=d_...`、slug、元ページURL、作品名
 - 状態: `published`
 - 種類: `review`
@@ -118,7 +121,10 @@ npm run dmm:import:dry
 - 元ページURL、広告URL: 作品ページへ遷移した後のURL
 - 作者名、本文: 空欄
 
-Windowsで毎日12:00に実行する場合は、タスクスケジューラへ登録します。
+現在の取得方法は、DMM/FANZAのHTMLページを `fetch` で取得し、ランキング名・サークル名・作品コメント・ジャンル・サムネイルURLなどをHTMLから読み取る方式です。
+これは公式APIではなく、技術的にはWebスクレイピングに分類されます。画像ファイル自体は保存せず、商品ページ内の画像URLを記事データに保存しています。
+
+Windowsで毎日00:00と12:00に実行する場合は、タスクスケジューラへ登録します。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\register-dmm-ranking-task.ps1
@@ -130,7 +136,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\register-dmm-ranking-task.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\register-dmm-ranking-task.ps1 -At 12:00
 ```
 
-## Cloudflare Workersで12:00自動更新
+一度に確認する候補数や詳細取得数を変える場合は、次のように指定できます。
+
+```powershell
+npm run dmm:import -- --limit 100 --detail-limit 50 --delay-ms 750
+```
+
+## Cloudflare Workersで00:00 / 12:00自動更新
 
 本番運用では、ローカルPCのタスクスケジューラではなくCloudflare WorkersのCron Triggerで更新します。
 この構成では、公開サイト・管理画面・DMMランキング取り込みを1つのWorkerで動かし、記事データはD1に保存します。
@@ -142,9 +154,13 @@ Cloudflare側の構成:
 - 公開サイト: `/site`
 - 管理画面: `/admin`
 - 手動取り込み: `/api/dmm/import?dryRun=1`
-- Cron: `0 3 * * *`
+- Cron: `0 15 * * *`, `0 3 * * *`
+- 候補件数: `DMM_RANKING_LIMIT=100`
+- 1回あたりの詳細取得上限: `DMM_RANKING_DETAIL_LIMIT=50`
+- 詳細取得の待機時間: `DMM_RANKING_REQUEST_DELAY_MS=750`
 
-CloudflareのCronはUTC基準です。日本時間12:00はUTC 03:00なので、`wrangler.jsonc` では `0 3 * * *` を設定しています。
+CloudflareのCronはUTC基準です。日本時間00:00は前日のUTC 15:00、日本時間12:00はUTC 03:00なので、`wrangler.jsonc` では `0 15 * * *` と `0 3 * * *` を設定しています。
+ランキングページは上位100件を候補として読みますが、各回で作品詳細ページを取得するのは未取得・情報不足の作品だけです。上限に達した分は次回以降へ回します。
 
 初回セットアップ:
 
@@ -193,13 +209,19 @@ npm run cf:dev
 Cron処理はローカルでも手動で呼び出せます。
 
 ```powershell
-curl "http://localhost:8787/cdn-cgi/handler/scheduled"
+curl "http://localhost:8787/__scheduled"
 ```
 
 DMM取り込みだけを管理者認証付きで確認する場合は、ブラウザで `/admin` にログインしたあと、次のURLを開きます。
 
 ```text
 http://localhost:8787/api/dmm/import?dryRun=1
+```
+
+取得件数を抑えて確認する場合:
+
+```text
+http://localhost:8787/api/dmm/import?dryRun=1&limit=100&detailLimit=10&delayMs=750
 ```
 
 問題なければデプロイします。
