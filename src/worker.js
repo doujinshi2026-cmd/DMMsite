@@ -2,6 +2,7 @@ const DEFAULT_RANKING_URL =
   "https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=sales/term=h24/";
 const DEFAULT_RANKING_LIMIT = 100;
 const DEFAULT_RANKING_DETAIL_LIMIT = 50;
+const MAX_RANKING_DETAIL_LIMIT = 40;
 const DEFAULT_REQUEST_DELAY_MS = 750;
 const MAX_REQUEST_DELAY_MS = 5000;
 const REQUEST_TIMEOUT_MS = 30000;
@@ -440,6 +441,7 @@ async function importDmmRanking(env, options = {}) {
     options.detailLimit,
     env.DMM_RANKING_DETAIL_LIMIT || DEFAULT_RANKING_DETAIL_LIMIT
   );
+  const safeDetailLimit = Math.min(detailLimit, MAX_RANKING_DETAIL_LIMIT);
   const delayMs = boundedNonNegativeInteger(
     options.delayMs,
     env.DMM_RANKING_REQUEST_DELAY_MS || DEFAULT_REQUEST_DELAY_MS,
@@ -454,7 +456,7 @@ async function importDmmRanking(env, options = {}) {
     ranking_url: rankingUrl,
     limit,
     ranking_pages: 0,
-    detail_limit: detailLimit,
+    detail_limit: safeDetailLimit,
     detail_requests: 0,
     request_delay_ms: delayMs,
     dry_run: dryRun,
@@ -494,7 +496,7 @@ async function importDmmRanking(env, options = {}) {
       continue;
     }
 
-    if (detailRequests >= detailLimit) {
+    if (detailRequests >= safeDetailLimit) {
       summary.deferred += 1;
       summary.items.push({
         rank: item.rank,
@@ -1533,6 +1535,16 @@ function absoluteUrl(value, baseUrl) {
     return new URL(decodeEntities(value), baseUrl).href;
   } catch {
     return decodeEntities(value);
+  }
+}
+
+function normalizeUrlKey(value) {
+  try {
+    const url = new URL(decodeEntities(value));
+    url.hash = "";
+    return url.href.replace(/\/$/u, "").toLowerCase();
+  } catch {
+    return normalizeKey(value);
   }
 }
 

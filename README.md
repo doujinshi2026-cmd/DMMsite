@@ -91,7 +91,7 @@ src/worker.js           Cloudflare Workers用の公開サイト/API/Cron
 ## DMMランキングから自動作成
 
 24時間人気ランキングをページ送り込みで上位100件まで候補として確認し、未投稿の作品はレビュー記事として追加し、既存記事の抜粋が空なら作品コメントで補完できます。
-制限対策として、作品詳細ページの取得は1回あたり最大50件に抑え、詳細ページ同士のリクエスト間に750msの待機を入れています。
+制限対策として、Cloudflare本番では作品詳細ページの取得を1回あたり最大40件に抑え、詳細ページ同士のリクエスト間に750msの待機を入れています。
 
 ```powershell
 npm run dmm:import
@@ -107,7 +107,7 @@ npm run dmm:import:dry
 
 - 対象URL: `https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=sales/term=h24/`
 - 対象順位: ページ送り込みで上位100件まで候補として確認
-- 詳細取得: 未取得・情報不足の作品を1回あたり最大50件
+- 詳細取得: 未取得・情報不足の作品を1回あたり最大40件
 - 待機時間: 作品詳細ページの取得ごとに750ms
 - 重複判定: `cid=d_...`、slug、元ページURL、作品名
 - 状態: `published`
@@ -139,7 +139,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\register-dmm-ranking-task.ps1
 一度に確認する候補数や詳細取得数を変える場合は、次のように指定できます。
 
 ```powershell
-npm run dmm:import -- --limit 100 --detail-limit 50 --delay-ms 750
+npm run dmm:import -- --limit 100 --detail-limit 40 --delay-ms 750
 ```
 
 ## Cloudflare Workersで00:00 / 12:00自動更新
@@ -156,7 +156,7 @@ Cloudflare側の構成:
 - 手動取り込み: `/api/dmm/import?dryRun=1`
 - Cron: `0 15 * * *`, `0 3 * * *`
 - 候補件数: `DMM_RANKING_LIMIT=100`
-- 1回あたりの詳細取得上限: `DMM_RANKING_DETAIL_LIMIT=50`
+- 1回あたりの詳細取得上限: `DMM_RANKING_DETAIL_LIMIT=40`
 - 詳細取得の待機時間: `DMM_RANKING_REQUEST_DELAY_MS=750`
 
 CloudflareのCronはUTC基準です。日本時間00:00は前日のUTC 15:00、日本時間12:00はUTC 03:00なので、`wrangler.jsonc` では `0 15 * * *` と `0 3 * * *` を設定しています。
