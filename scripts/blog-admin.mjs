@@ -142,7 +142,7 @@ async function route(request, response) {
   }
 
   if (request.method === "GET" && pathname === "/site") {
-    const allArticles = (await listArticles()).filter((article) => article.status !== "archived");
+    const allArticles = (await listArticles()).filter(isPublicArticle);
     const filters = {
       q: String(url.searchParams.get("q") || "").trim(),
       circle: String(url.searchParams.get("circle") || "").trim(),
@@ -156,6 +156,7 @@ async function route(request, response) {
   if (request.method === "GET" && pathname.startsWith("/site/posts/")) {
     const slug = pathname.slice("/site/posts/".length);
     const article = await readArticle(slug);
+    if (!article || !isPublicArticle(article.metadata)) return sendText(response, 404, "Not found");
     return sendHtml(response, renderArticlePage(article));
   }
 
@@ -323,6 +324,10 @@ function contentTypeFor(filePath) {
   }[ext] || "application/octet-stream";
 }
 
+function isPublicArticle(article) {
+  return article?.status === "published";
+}
+
 function renderSiteIndex(articles, context = {}) {
   const filters = context.filters || {};
   const allArticles = context.allArticles || articles;
@@ -355,7 +360,6 @@ function renderSiteIndex(articles, context = {}) {
         <article class="post-card">
           ${article.thumbnail_url ? `<a class="post-image-link" href="/site/posts/${encodeURIComponent(article.slug)}"><img src="${escapeHtml(article.thumbnail_url)}" alt=""></a>` : ""}
           <div>
-            <p class="meta">${escapeHtml(article.status)} / ${escapeHtml(article.article_type || "review")}</p>
             <h2><a href="/site/posts/${encodeURIComponent(article.slug)}">${escapeBreakableText(article.title)}</a></h2>
             ${circleLink || authorLink ? `<p class="work-meta">${circleLink}${circleLink && authorLink ? " / " : ""}${authorLink}</p>` : ""}
             <p class="post-excerpt">${escapeHtml(article.excerpt || "本文の抜粋はまだありません。")}</p>
@@ -369,10 +373,11 @@ function renderSiteIndex(articles, context = {}) {
   return pageShell("R18ブックス・同人誌レビューガイド", `
     <main class="site-shell">
       <header class="site-header">
-        <p>18歳未満閲覧禁止 / PRを含む場合があります</p>
+        <p>18歳未満閲覧禁止 / 広告・PR</p>
         <h1>R18ブックス・同人誌レビューガイド</h1>
         ${breadcrumb}
       </header>
+      ${renderSiteDisclosure()}
       <div class="catalog-layout">
         <aside class="filter-panel">
           <form method="get" action="/site" class="filter-form">
@@ -442,7 +447,7 @@ function renderArticlePage(article, options = {}) {
       ${options.preview ? '<p class="preview-banner">Preview</p>' : ""}
       <article>
         <header class="site-header">
-          <p>18歳未満閲覧禁止 / ${escapeHtml(metadata.pr_label || "PR")}</p>
+          <p>18歳未満閲覧禁止 / 広告・${escapeHtml(metadata.pr_label || "PR")}</p>
           <h1>${escapeBreakableText(metadata.title)}</h1>
           ${circleLink || authorLink ? `<p class="work-meta">${circleLink}${circleLink && authorLink ? " / " : ""}${authorLink}</p>` : ""}
           <div class="tags">${labels}</div>
@@ -450,10 +455,28 @@ function renderArticlePage(article, options = {}) {
         ${heroImage}
         ${renderWorkComment(metadata.excerpt)}
         <div class="article-body">${body}</div>
-        ${productLink ? `<p class="cta"><a href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer">作品ページを確認する</a></p>` : ""}
+        ${productLink ? renderAffiliateNotice(metadata.pr_label) : ""}
+        ${productLink ? `<p class="cta"><a href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer">広告リンクで作品ページを確認する</a></p>` : ""}
       </article>
     </main>
   `);
+}
+
+function renderSiteDisclosure() {
+  return `
+      <section class="site-disclosure" aria-label="広告とサイト運営の表示">
+        <p><strong>広告・PR</strong> 当サイトはDMM/FANZAアフィリエイト広告を利用しています。商品リンクから購入・登録等が発生した場合、運営者に報酬が支払われることがあります。</p>
+        <p>当サイトはDMM/FANZA公式サイトではありません。掲載内容は成人向け作品の紹介です。18歳未満の方は閲覧できません。</p>
+      </section>
+  `;
+}
+
+function renderAffiliateNotice(label = "PR") {
+  return `
+        <section class="affiliate-notice" aria-label="広告リンクの表示">
+          <p><strong>${escapeHtml(label || "PR")}</strong> ここから先はDMM/FANZAの商品ページです。リンク先での購入・登録等により報酬が発生する場合があります。</p>
+        </section>
+  `;
 }
 
 function renderWorkComment(value) {
@@ -539,7 +562,7 @@ function renderPlainTags(tags) {
 }
 
 function renderBreadcrumb(filters) {
-  const items = ['<a href="/site">FANZA同人</a>', '<a href="/site">作品一覧</a>'];
+  const items = ['<a href="/site">作品一覧</a>'];
   if (filters.circle) {
     items.push("サークル", `<a href="${siteFilterUrl({ circle: filters.circle })}">${escapeHtml(filters.circle)}</a>`);
   }

@@ -2,7 +2,7 @@
 schema_version: 1
 title: "処女が童貞との初体験で目覚めちゃう話"
 slug: "first-review-template"
-status: "published"
+status: "archived"
 article_type: "review"
 source_type: "manual"
 published_at: "2026-05-23T03:11:00.000Z"

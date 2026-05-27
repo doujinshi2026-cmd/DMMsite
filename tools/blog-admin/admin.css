@@ -525,6 +525,7 @@ textarea:focus {
   margin: 0 auto;
   max-width: 1040px;
   padding: 32px 20px 60px;
+  width: 100%;
 }
 
 .site-header {
@@ -548,6 +549,41 @@ textarea:focus {
 .post-grid {
   display: grid;
   gap: 16px;
+}
+
+.site-disclosure,
+.affiliate-notice {
+  background: #fff;
+  border: 1px solid #d7e0e4;
+  border-radius: 8px;
+  color: #2f3b42;
+  margin: 0 0 20px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 14px 16px;
+}
+
+.affiliate-notice {
+  margin: 24px 0 0;
+}
+
+.site-disclosure p,
+.affiliate-notice p {
+  font-size: 13px;
+  line-break: anywhere;
+  line-height: 1.7;
+  margin: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.site-disclosure p + p {
+  margin-top: 6px;
+}
+
+.site-disclosure strong,
+.affiliate-notice strong {
+  color: var(--accent-strong);
 }
 
 .catalog-layout {
@@ -639,8 +675,15 @@ textarea:focus {
   min-width: 0;
 }
 
+.tags a,
+.tags span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
 .article-shell {
   max-width: 900px;
+  overflow-x: hidden;
 }
 
 .article-body {
@@ -660,14 +703,14 @@ textarea:focus {
 
 .article-shell > article > .hero-image {
   margin: 18px auto 0;
-  max-width: min(520px, 100%);
-  width: min(520px, 100%);
+  max-width: 520px;
+  width: 100%;
 }
 
 .article-shell .hero-link {
   margin: 18px auto 0;
-  max-width: min(520px, 100%);
-  width: min(520px, 100%);
+  max-width: 520px;
+  width: 100%;
 }
 
 .article-shell .hero-link .hero-image {
@@ -693,10 +736,12 @@ textarea:focus {
 .work-comment p {
   color: #253036;
   font-size: 16px;
+  line-break: anywhere;
   line-height: 1.9;
   margin: 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .breadcrumbs {
@@ -902,11 +947,37 @@ textarea:focus {
 
 @media (max-width: 520px) {
   .site-shell {
-    padding: 28px 14px 48px;
+    padding: 28px 18px 48px 14px;
   }
 
   .site-header h1 {
-    font-size: 26px;
+    font-size: 24px;
+    line-height: 1.22;
+  }
+
+  .site-disclosure,
+  .affiliate-notice {
+    max-width: calc(100vw - 32px);
+    padding: 12px;
+  }
+
+  .site-disclosure p,
+  .affiliate-notice p {
+    font-size: 12px;
+  }
+
+  .article-shell > article,
+  .article-shell .site-header,
+  .article-shell .hero-link,
+  .article-shell > article > .hero-image,
+  .article-body,
+  .work-comment {
+    max-width: calc(100vw - 42px);
+    width: 320px;
+  }
+
+  .article-shell .site-header h1 {
+    font-size: 20px;
   }
 
   .post-card {
