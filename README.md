@@ -268,3 +268,4 @@ manual/2026-05-23_cloudflare-security-deploy.md
 
 Cloudflare Workers版では `/api/*`、`/preview/*`、`/admin`、`/admin.js` をBasic認証で保護します。
 デプロイ前に `BLOG_CMS_PASSWORD` をSecretへ設定してください。
+!!
