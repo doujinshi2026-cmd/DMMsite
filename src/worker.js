@@ -304,9 +304,10 @@ async function insertArticle(env, metadata, body, productId) {
     `INSERT INTO articles (
       schema_version, title, slug, status, article_type, source_type, published_at, updated_at,
       excerpt, seo_title, product_title, circle_name, author_name, source_url, affiliate_url,
-      thumbnail_url, genres_json, emotions_json, rights_status, pr_label, automation_ready,
+      thumbnail_url, sample_images_json, genres_json, emotions_json, weekly_pick,
+      weekly_pick_order, editor_note, rights_status, pr_label, automation_ready,
       body, product_id, created_at, imported_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       metadata.schema_version,
@@ -325,8 +326,12 @@ async function insertArticle(env, metadata, body, productId) {
       metadata.source_url,
       metadata.affiliate_url,
       metadata.thumbnail_url,
+      JSON.stringify(metadata.sample_images || []),
       JSON.stringify(metadata.genres || []),
       JSON.stringify(metadata.emotions || []),
+      metadata.weekly_pick ? 1 : 0,
+      metadata.weekly_pick_order || 0,
+      metadata.editor_note,
       metadata.rights_status,
       metadata.pr_label,
       metadata.automation_ready ? 1 : 0,
@@ -344,7 +349,8 @@ async function updateArticle(env, oldSlug, metadata, body, productId) {
       schema_version = ?, title = ?, slug = ?, status = ?, article_type = ?, source_type = ?,
       published_at = ?, updated_at = ?, excerpt = ?, seo_title = ?, product_title = ?,
       circle_name = ?, author_name = ?, source_url = ?, affiliate_url = ?, thumbnail_url = ?,
-      genres_json = ?, emotions_json = ?, rights_status = ?, pr_label = ?, automation_ready = ?,
+      sample_images_json = ?, genres_json = ?, emotions_json = ?, weekly_pick = ?,
+      weekly_pick_order = ?, editor_note = ?, rights_status = ?, pr_label = ?, automation_ready = ?,
       body = ?, product_id = COALESCE(?, product_id), imported_at = COALESCE(imported_at, ?)
     WHERE slug = ?`
   )
@@ -365,8 +371,12 @@ async function updateArticle(env, oldSlug, metadata, body, productId) {
       metadata.source_url,
       metadata.affiliate_url,
       metadata.thumbnail_url,
+      JSON.stringify(metadata.sample_images || []),
       JSON.stringify(metadata.genres || []),
       JSON.stringify(metadata.emotions || []),
+      metadata.weekly_pick ? 1 : 0,
+      metadata.weekly_pick_order || 0,
+      metadata.editor_note,
       metadata.rights_status,
       metadata.pr_label,
       metadata.automation_ready ? 1 : 0,
@@ -408,8 +418,12 @@ function normalizeArticle(input, existing = {}) {
     source_url: String(input.source_url || "").trim(),
     affiliate_url: String(input.affiliate_url || "").trim(),
     thumbnail_url: String(input.thumbnail_url || "").trim(),
+    sample_images: normalizeList(input.sample_images ?? existing.sample_images),
     genres: normalizeList(input.genres),
     emotions: normalizeList(input.emotions),
+    weekly_pick: Boolean(input.weekly_pick ?? existing.weekly_pick),
+    weekly_pick_order: toInteger(input.weekly_pick_order ?? existing.weekly_pick_order, 0),
+    editor_note: String(input.editor_note ?? existing.editor_note ?? "").trim(),
     rights_status: rightsStatus,
     pr_label: String(input.pr_label || "PR").trim(),
     automation_ready: Boolean(input.automation_ready),
@@ -434,8 +448,12 @@ function rowToMetadata(row) {
     source_url: row.source_url || "",
     affiliate_url: row.affiliate_url || "",
     thumbnail_url: row.thumbnail_url || "",
+    sample_images: parseJsonList(row.sample_images_json),
     genres: parseJsonList(row.genres_json),
     emotions: parseJsonList(row.emotions_json),
+    weekly_pick: Boolean(row.weekly_pick),
+    weekly_pick_order: toInteger(row.weekly_pick_order, 0),
+    editor_note: row.editor_note || "",
     rights_status: row.rights_status || "pending_review",
     pr_label: row.pr_label || "PR",
     automation_ready: Boolean(row.automation_ready),
@@ -599,6 +617,7 @@ async function importDmmRanking(env, options = {}) {
         source_url: detail.url,
         affiliate_url: detail.url,
         thumbnail_url: detail.thumbnailUrl,
+        sample_images: detail.sampleImageUrls,
         genres: detail.genres,
         emotions: [],
         rights_status: "pending_review",
@@ -702,6 +721,7 @@ function hasImportDetails(article) {
   return Boolean(
     String(metadata.excerpt || "").trim() &&
       String(metadata.thumbnail_url || "").trim() &&
+      (metadata.sample_images || []).length &&
       (metadata.genres || []).length
   );
 }
@@ -715,12 +735,15 @@ function buildExistingArticleUpdate(article, detail, productId) {
   const nextAffiliateUrl = metadata.affiliate_url || detail.url || "";
   const nextThumbnailUrl = metadata.thumbnail_url || detail.thumbnailUrl || "";
   const nextGenres = currentGenres.length ? currentGenres : detail.genres || [];
+  const currentSampleImages = metadata.sample_images || [];
+  const nextSampleImages = mergeSampleImages(currentSampleImages, detail.sampleImageUrls || []);
 
   const hasChanges =
     nextExcerpt !== (metadata.excerpt || "") ||
     nextSourceUrl !== (metadata.source_url || "") ||
     nextAffiliateUrl !== (metadata.affiliate_url || "") ||
     nextThumbnailUrl !== (metadata.thumbnail_url || "") ||
+    !arraysEqual(nextSampleImages, currentSampleImages) ||
     !arraysEqual(nextGenres, currentGenres);
 
   if (!hasChanges) return null;
@@ -732,6 +755,7 @@ function buildExistingArticleUpdate(article, detail, productId) {
     source_url: nextSourceUrl,
     affiliate_url: nextAffiliateUrl,
     thumbnail_url: nextThumbnailUrl,
+    sample_images: nextSampleImages,
     genres: nextGenres,
     body: article.body || "",
     product_id: productId || metadata.product_id || "",
@@ -741,6 +765,12 @@ function buildExistingArticleUpdate(article, detail, productId) {
 function arraysEqual(left, right) {
   if (left.length !== right.length) return false;
   return left.every((value, index) => value === right[index]);
+}
+
+function mergeSampleImages(currentImages, importedImages) {
+  if (!currentImages.length) return importedImages;
+  if (!importedImages.length) return currentImages;
+  return unique([...currentImages, ...importedImages]);
 }
 
 async function backfillDmmDetails(env, options = {}) {
@@ -958,12 +988,14 @@ function parseProductDetail(html, url, fallbackTitle) {
         .filter(Boolean)
     : [];
   const genres = unique([...currentGenres, ...legacyGenres]);
+  const thumbnailUrl = extractThumbnailUrl(html, url, fallbackTitle);
 
   return {
     url,
     genres,
     workComment: extractWorkComment(html),
-    thumbnailUrl: extractThumbnailUrl(html, url, fallbackTitle),
+    thumbnailUrl,
+    sampleImageUrls: extractSampleImageUrls(html, url, thumbnailUrl),
   };
 }
 
@@ -1036,6 +1068,64 @@ function extractThumbnailUrl(html, baseUrl, title) {
   }
 
   return "";
+}
+
+function extractSampleImageUrls(html, baseUrl, thumbnailUrl = "") {
+  const candidates = [];
+  const productId = extractProductId(thumbnailUrl) || extractProductId(baseUrl);
+  if (thumbnailUrl) candidates.push(thumbnailUrl);
+
+  const productPreviewRe = /<ul\b([^>]*)>([\s\S]*?)<\/ul>/giu;
+  for (const block of html.matchAll(productPreviewRe)) {
+    if (!hasClass(block[1], "productPreview")) continue;
+    candidates.push(...extractImageUrlsFromHtml(block[2], baseUrl));
+  }
+
+  if (candidates.length <= (thumbnailUrl ? 1 : 0)) {
+    candidates.push(...extractImageUrlsFromHtml(html, baseUrl));
+  }
+
+  return unique(
+    candidates
+      .map((url) => normalizeImageUrl(url))
+      .filter((url) => isSampleImageUrl(url) && isSameProductImage(url, productId))
+  );
+}
+
+function extractImageUrlsFromHtml(html, baseUrl) {
+  const urls = [];
+  for (const match of String(html || "").matchAll(/<a\b([^>]*)>/giu)) {
+    const href = getAttr(match[1], "href");
+    if (href) urls.push(absoluteUrl(href, baseUrl));
+  }
+  for (const match of String(html || "").matchAll(/<img\b([^>]*)>/giu)) {
+    const attrs = match[1];
+    const src = getAttr(attrs, "src") || getAttr(attrs, "data-src") || getAttr(attrs, "data-original");
+    if (src) urls.push(absoluteUrl(src, baseUrl));
+  }
+  return urls;
+}
+
+function normalizeImageUrl(value) {
+  try {
+    const url = new URL(decodeEntities(value));
+    url.hash = "";
+    return url.href;
+  } catch {
+    return decodeEntities(value);
+  }
+}
+
+function isSampleImageUrl(value) {
+  const url = String(value || "");
+  if (!/(?:doujin-assets|ebook-assets)\.dmm\.co\.jp\//iu.test(url)) return false;
+  return /\.(?:jpe?g|png|webp)(?:[?#].*)?$/iu.test(url);
+}
+
+function isSameProductImage(value, productId) {
+  if (!productId) return true;
+  const imageProductId = extractProductId(value);
+  return !imageProductId || normalizeKey(imageProductId) === normalizeKey(productId);
 }
 
 function extractAnchor(html) {
@@ -1133,6 +1223,9 @@ function renderSiteIndex(articles, context = {}) {
   const filters = context.filters || {};
   const allArticles = context.allArticles || articles;
   const countSummary = renderCountSummary(articles.length, allArticles.length, filters);
+  const filtered = hasActiveFilters(filters);
+  const weeklyPicks = filtered ? [] : sortWeeklyPicks(allArticles.filter((article) => article.weekly_pick));
+  const listArticles = weeklyPicks.length ? articles.filter((article) => !article.weekly_pick) : articles;
   const circles = distinctValues(allArticles.map((article) => article.circle_name));
   const authors = distinctValues(
     allArticles
@@ -1147,7 +1240,7 @@ function renderSiteIndex(articles, context = {}) {
   );
   const breadcrumb = renderBreadcrumb(filters);
   const activeLabel = renderActiveFilterLabel(filters);
-  const cards = articles
+  const cards = listArticles
     .map((article) => {
       const labels =
         renderGenreTags((article.genres || []).slice(0, 8), filters) +
@@ -1180,6 +1273,7 @@ function renderSiteIndex(articles, context = {}) {
         ${countSummary}
         ${breadcrumb}
       </header>
+      ${renderWeeklyPickSection(weeklyPicks)}
       <div class="catalog-layout">
         <aside class="filter-panel">
           <form method="get" action="/site" class="filter-form">
@@ -1224,6 +1318,57 @@ function renderSiteIndex(articles, context = {}) {
   `);
 }
 
+function sortWeeklyPicks(articles) {
+  return [...articles].sort((a, b) => {
+    const leftOrder = toInteger(a.weekly_pick_order, 0);
+    const rightOrder = toInteger(b.weekly_pick_order, 0);
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    const leftDate = String(a.updated_at || a.published_at || a.file_updated_at || "");
+    const rightDate = String(b.updated_at || b.published_at || b.file_updated_at || "");
+    return rightDate.localeCompare(leftDate);
+  });
+}
+
+function renderWeeklyPickSection(articles) {
+  if (!articles.length) return "";
+  return `
+      <section class="weekly-picks" aria-labelledby="weekly-picks-heading">
+        <div class="section-heading">
+          <p>編集ピックアップ</p>
+          <h2 id="weekly-picks-heading">今週のおすすめ</h2>
+        </div>
+        <div class="weekly-pick-grid">
+          ${articles.map((article) => renderWeeklyPickCard(article)).join("")}
+        </div>
+      </section>
+  `;
+}
+
+function renderWeeklyPickCard(article) {
+  const productLink = productPageUrl(article);
+  const articleLink = `/site/posts/${encodeURIComponent(article.slug)}`;
+  const labels =
+    renderGenreTags((article.genres || []).slice(0, 6)) +
+    renderPlainTags((article.emotions || []).slice(0, 3));
+  const note = String(article.editor_note || article.excerpt || "").trim();
+  return `
+            <article class="weekly-pick-card">
+              ${renderSampleCarousel(article, productLink, "weekly")}
+              <div class="weekly-pick-body">
+                <p class="weekly-label">今週のおすすめ</p>
+                <h3><a href="${articleLink}">${escapeBreakableText(article.title)}</a></h3>
+                ${article.circle_name || article.author_name ? `<p class="work-meta">${escapeHtml([article.circle_name, article.author_name].filter(Boolean).join(" / "))}</p>` : ""}
+                ${note ? `<p class="editor-note">${escapeHtml(note)}</p>` : ""}
+                <div class="tags">${labels}</div>
+                <div class="pick-actions">
+                  <a class="ghost-link" href="${articleLink}">レビューを見る</a>
+                  ${productLink ? `<a class="pick-cta" href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer">作品ページ</a>` : ""}
+                </div>
+              </div>
+            </article>
+  `;
+}
+
 function renderArticlePage(article, options = {}) {
   const metadata = article.metadata;
   const productLink = productPageUrl(metadata);
@@ -1237,7 +1382,9 @@ function renderArticlePage(article, options = {}) {
   const authorLink = metadata.author_name
     ? `<a href="${siteFilterUrl({ circle: metadata.circle_name, author: metadata.author_name })}">${escapeHtml(metadata.author_name)}</a>`
     : "";
-  const heroImage = metadata.thumbnail_url
+  const sampleImages = articleSampleImages(metadata);
+  const sampleViewer = sampleImages.length > 1 ? renderSampleCarousel(metadata, productLink, "article") : "";
+  const heroImage = !sampleViewer && metadata.thumbnail_url
     ? productLink
       ? `<a class="image-product-link hero-link" href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer" aria-label="商品ページを開く"><img class="hero-image" src="${escapeHtml(metadata.thumbnail_url)}" alt=""></a>`
       : `<img class="hero-image" src="${escapeHtml(metadata.thumbnail_url)}" alt="">`
@@ -1254,7 +1401,7 @@ function renderArticlePage(article, options = {}) {
           ${circleLink || authorLink ? `<p class="work-meta">${circleLink}${circleLink && authorLink ? " / " : ""}${authorLink}</p>` : ""}
           <div class="tags">${labels}</div>
         </header>
-        ${heroImage}
+        ${sampleViewer || heroImage}
         ${renderWorkComment(metadata.excerpt)}
         <div class="article-body">${body}</div>
         ${productLink ? `<p class="cta"><a href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer">作品ページを確認する</a></p>` : ""}
@@ -1263,14 +1410,43 @@ function renderArticlePage(article, options = {}) {
   `);
 }
 
+function renderSampleCarousel(article, productLink = "", variant = "") {
+  const images = articleSampleImages(article);
+  if (!images.length) return "";
+  const link = String(productLink || "").trim();
+  const className = ["sample-carousel", variant ? `sample-carousel-${variant}` : ""].filter(Boolean).join(" ");
+  const imageItems = images
+    .slice(0, 12)
+    .map((url, index) => {
+      const image = `<img src="${escapeHtml(url)}" alt="${escapeHtml(`${article.title || "作品"} 試し読み ${index + 1}`)}" loading="lazy">`;
+      return link
+        ? `<a class="sample-slide" href="${escapeHtml(link)}" target="_blank" rel="sponsored noopener noreferrer">${image}</a>`
+        : `<span class="sample-slide">${image}</span>`;
+    })
+    .join("");
+  return `
+        <div class="${className}" aria-label="試し読み画像">
+          ${imageItems}
+        </div>
+  `;
+}
+
+function articleSampleImages(article) {
+  return unique([article.thumbnail_url, ...(article.sample_images || [])].filter(Boolean));
+}
+
 function renderCountSummary(visibleCount, totalCount, filters) {
-  const hasFilters = Boolean(
+  const hasFilters = hasActiveFilters(filters);
+  return `<p class="site-count">現在の作品数 <strong>${formatCount(totalCount)}</strong>件${hasFilters ? ` / 表示中 <strong>${formatCount(visibleCount)}</strong>件` : ""}</p>`;
+}
+
+function hasActiveFilters(filters = {}) {
+  return Boolean(
     filters.q ||
       filters.circle ||
       filters.author ||
       (filters.genres || []).length
   );
-  return `<p class="site-count">現在の作品数 <strong>${formatCount(totalCount)}</strong>件${hasFilters ? ` / 表示中 <strong>${formatCount(visibleCount)}</strong>件` : ""}</p>`;
 }
 
 function formatCount(value) {
@@ -1561,6 +1737,11 @@ function normalizeList(value) {
     .flatMap((item) => String(item || "").split(/[\s\u3000,、，]+/u))
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function toInteger(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isInteger(number) ? number : fallback;
 }
 
 function parseJsonList(value) {

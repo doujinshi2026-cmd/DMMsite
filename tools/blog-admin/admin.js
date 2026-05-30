@@ -20,10 +20,14 @@ const fields = {
   source_url: $("sourceUrlInput"),
   affiliate_url: $("affiliateUrlInput"),
   thumbnail_url: $("thumbnailUrlInput"),
+  sample_images: $("sampleImagesInput"),
   genres: $("genresInput"),
   emotions: $("emotionsInput"),
   rights_status: $("rightsStatusInput"),
   pr_label: $("prLabelInput"),
+  weekly_pick: $("weeklyPickInput"),
+  weekly_pick_order: $("weeklyPickOrderInput"),
+  editor_note: $("editorNoteInput"),
   body: $("bodyInput"),
 };
 
@@ -147,6 +151,7 @@ function renderArticleList() {
       ${article.circle_name || article.author_name ? `<small>${escapeHtml([article.circle_name, article.author_name].filter(Boolean).join(" / "))}</small>` : ""}
       <span class="badge-row">
         <span class="badge status-${escapeHtml(article.status || "draft")}">${statusLabel(article.status)}</span>
+        ${article.weekly_pick ? '<span class="badge pick-badge">おすすめ</span>' : ""}
         ${(article.genres || []).slice(0, 2).map((tag) => `<span class="badge">${escapeHtml(tag)}</span>`).join("")}
       </span>
     `;
@@ -180,10 +185,14 @@ function fillForm(metadata, body) {
   fields.source_url.value = metadata.source_url || "";
   fields.affiliate_url.value = metadata.affiliate_url || "";
   fields.thumbnail_url.value = metadata.thumbnail_url || "";
+  fields.sample_images.value = (metadata.sample_images || []).join("\n");
   fields.genres.value = (metadata.genres || []).join("\n");
   fields.emotions.value = (metadata.emotions || []).join(", ");
   fields.rights_status.value = metadata.rights_status || "pending_review";
   fields.pr_label.value = metadata.pr_label || "PR";
+  fields.weekly_pick.checked = Boolean(metadata.weekly_pick);
+  fields.weekly_pick_order.value = metadata.weekly_pick_order || "";
+  fields.editor_note.value = metadata.editor_note || "";
   fields.body.value = body || "";
 }
 
@@ -201,6 +210,10 @@ function newArticle() {
       pr_label: "PR",
       genres: [],
       emotions: [],
+      sample_images: [],
+      weekly_pick: false,
+      weekly_pick_order: 0,
+      editor_note: "",
       author_name: "",
     },
     ""
@@ -253,8 +266,12 @@ function collectArticle() {
     source_url: fields.source_url.value,
     affiliate_url: fields.affiliate_url.value,
     thumbnail_url: fields.thumbnail_url.value,
+    sample_images: splitUrlList(fields.sample_images.value),
     genres: splitList(fields.genres.value),
     emotions: splitList(fields.emotions.value),
+    weekly_pick: fields.weekly_pick.checked,
+    weekly_pick_order: fields.weekly_pick_order.value,
+    editor_note: fields.editor_note.value,
     rights_status: fields.rights_status.value,
     pr_label: fields.pr_label.value || "PR",
     body: fields.body.value,
@@ -422,8 +439,11 @@ function switchTab(tab) {
 }
 
 function updatePreviewAndChecks() {
-  const productLink = productPageUrl(collectArticle());
-  const thumbnail = fields.thumbnail_url.value
+  const article = collectArticle();
+  const productLink = productPageUrl(article);
+  const sampleImages = articleSampleImages(article);
+  const sampleViewer = sampleImages.length > 1 ? renderSampleCarousel(article, productLink, "article") : "";
+  const thumbnail = !sampleViewer && fields.thumbnail_url.value
     ? productLink
       ? `<a class="image-product-link hero-link" href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer" aria-label="商品ページを開く"><img class="hero-image" src="${escapeHtml(fields.thumbnail_url.value)}" alt=""></a>`
       : `<img src="${escapeHtml(fields.thumbnail_url.value)}" alt="">`
@@ -431,7 +451,8 @@ function updatePreviewAndChecks() {
   $("previewPane").innerHTML = `
     <h1>${escapeBreakableText(fields.title.value || "タイトル未入力")}</h1>
     ${fields.circle_name.value || fields.author_name.value ? `<p class="work-meta">${escapeHtml([fields.circle_name.value, fields.author_name.value].filter(Boolean).join(" / "))}</p>` : ""}
-    ${thumbnail}
+    ${sampleViewer || thumbnail}
+    ${fields.weekly_pick.checked && fields.editor_note.value.trim() ? `<section class="editor-note-box"><h2>おすすめコメント</h2><p>${escapeHtml(fields.editor_note.value.trim())}</p></section>` : ""}
     ${renderWorkComment(fields.excerpt.value)}
     ${markdownToHtml(fields.body.value, { imageLinkUrl: productLink })}
   `;
@@ -450,6 +471,31 @@ function renderWorkComment(value) {
   `;
 }
 
+function renderSampleCarousel(article, productLink = "", variant = "") {
+  const images = articleSampleImages(article);
+  if (!images.length) return "";
+  const link = String(productLink || "").trim();
+  const className = ["sample-carousel", variant ? `sample-carousel-${variant}` : ""].filter(Boolean).join(" ");
+  const imageItems = images
+    .slice(0, 12)
+    .map((url, index) => {
+      const image = `<img src="${escapeHtml(url)}" alt="${escapeHtml(`${article.title || "作品"} 試し読み ${index + 1}`)}" loading="lazy">`;
+      return link
+        ? `<a class="sample-slide" href="${escapeHtml(link)}" target="_blank" rel="sponsored noopener noreferrer">${image}</a>`
+        : `<span class="sample-slide">${image}</span>`;
+    })
+    .join("");
+  return `
+    <div class="${className}" aria-label="試し読み画像">
+      ${imageItems}
+    </div>
+  `;
+}
+
+function articleSampleImages(article) {
+  return unique([article.thumbnail_url, ...(article.sample_images || [])].filter(Boolean));
+}
+
 function renderChecks() {
   const article = collectArticle();
   const bodyLength = article.body.trim().length;
@@ -458,7 +504,11 @@ function renderChecks() {
   const productLink = productPageUrl(article);
   const hasAffiliate = Boolean(article.affiliate_url.trim());
   const hasPr = Boolean(article.pr_label.trim());
-  const usesImage = Boolean(article.thumbnail_url.trim() || /!\[[^\]]*\]\([^)]+\)/u.test(article.body));
+  const usesImage = Boolean(
+    article.thumbnail_url.trim() ||
+      article.sample_images.length ||
+      /!\[[^\]]*\]\([^)]+\)/u.test(article.body)
+  );
   const readyOrPublished = ["ready", "published"].includes(article.status);
 
   const checks = [
@@ -491,6 +541,11 @@ function renderChecks() {
       label: "画像権利",
       detail: rightsLabel(article.rights_status),
       state: !usesImage || article.rights_status !== "pending_review" ? "pass" : "warn",
+    },
+    {
+      label: "試し読み画像",
+      detail: `${article.sample_images.length}枚`,
+      state: article.sample_images.length ? "pass" : "warn",
     },
   ];
 
@@ -614,6 +669,17 @@ function splitList(value) {
     .split(/[\s\u3000,、，]+/u)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function splitUrlList(value) {
+  return String(value || "")
+    .split(/[\s\u3000]+/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function unique(values) {
+  return [...new Set(values)];
 }
 
 function slugify(value) {

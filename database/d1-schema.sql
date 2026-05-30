@@ -18,8 +18,12 @@ CREATE TABLE IF NOT EXISTS articles (
   source_url TEXT NOT NULL DEFAULT '',
   affiliate_url TEXT NOT NULL DEFAULT '',
   thumbnail_url TEXT NOT NULL DEFAULT '',
+  sample_images_json TEXT NOT NULL DEFAULT '[]',
   genres_json TEXT NOT NULL DEFAULT '[]',
   emotions_json TEXT NOT NULL DEFAULT '[]',
+  weekly_pick INTEGER NOT NULL DEFAULT 0,
+  weekly_pick_order INTEGER NOT NULL DEFAULT 0,
+  editor_note TEXT NOT NULL DEFAULT '',
   rights_status TEXT NOT NULL DEFAULT 'pending_review'
     CHECK (rights_status IN ('pending_review', 'approved_ad_material', 'link_only')),
   pr_label TEXT NOT NULL DEFAULT 'PR',
@@ -38,3 +42,6 @@ CREATE INDEX IF NOT EXISTS idx_articles_published_at
 
 CREATE INDEX IF NOT EXISTS idx_articles_circle_name
   ON articles(circle_name);
+
+CREATE INDEX IF NOT EXISTS idx_articles_weekly_pick
+  ON articles(weekly_pick, weekly_pick_order);

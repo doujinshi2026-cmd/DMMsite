@@ -48,6 +48,7 @@ npm run blog:admin -- --port 4174
 - 記事の新規作成、編集、保存
 - 下書き、公開準備、公開、保管の状態管理
 - タイトル、slug、抜粋、サークル、作者、ジャンル、感情タグ、PR表記、権利確認状態の入力
+- 今週のおすすめ枠への掲載、表示順、おすすめコメント、試し読み画像URLの手動編集
 - Markdown本文の編集とプレビュー
 - 画像アップロードとMarkdownへの埋め込み
 - 本文内画像クリック時の商品ページ遷移
@@ -75,6 +76,12 @@ http://127.0.0.1:4173/site?circle=どじろーブックス&author=どじろー
 記事本文に埋め込んだ画像は、`affiliate_url` があればそれを優先し、未設定の場合は `source_url` へ遷移します。
 
 ジャンルはBlog CMSで1行1タグ、またはスペース・読点「、」・カンマ「,」区切りで入力します。
+
+## 今週のおすすめ枠
+
+Blog CMSで記事の `今週のおすすめ` を有効にすると、通常の `/site` の一番上に「今週のおすすめ」として表示されます。検索やジャンル絞り込み中は、絞り込み結果を優先するためおすすめ枠は出ません。
+
+おすすめ枠では `おすすめコメント` を本文やDMM取得文とは別に手動入力できます。`試し読み画像URL` に複数URLが入っている記事は、横スライド式の画像ビューアで表示されます。
 
 ## 保存先
 
@@ -128,6 +135,7 @@ npm run works:update:dry
 - ジャンル: 作品ページの `.c_icon_detailGenreTag`
 - 抜粋: 作品ページの「作品コメント」内の `.summary__txt`
 - サムネイルURL: 作品ページ内の `doujin-assets.dmm.co.jp` のPR画像
+- 試し読み画像URL: 作品ページ内の `.productPreview` に含まれるPR画像とサンプル画像
 - 元ページURL、広告URL: 作品ページへ遷移した後のURL
 - 作者名、本文: 空欄
 
@@ -206,6 +214,18 @@ D1のテーブルを作成します。
 
 ```powershell
 npm run cf:d1:init:remote
+```
+
+既存のD1データベースへおすすめ枠と試し読み画像の列を追加する場合は、次の移行SQLを1回だけ実行します。
+
+```powershell
+npx wrangler d1 execute dmmsite-db --remote --file=database/d1-migration-editorial-fields.sql
+```
+
+既存記事の試し読み画像を補完する場合は、管理者認証付きで `/api/dmm/backfill` を呼びます。まずは dry run で確認してください。
+
+```text
+https://<your-worker-domain>/api/dmm/backfill?dryRun=1&limit=40
 ```
 
 既存の `content/posts/*.md` をD1へ移す場合だけ、seed SQLを生成して流し込みます。これは初回移行用で、日々の作品追加はWorkerのCronと `npm run works:update` がD1へ直接書き込みます。

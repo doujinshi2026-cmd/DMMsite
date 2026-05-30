@@ -123,6 +123,12 @@
         </label>
 
         <label class="field wide">
+          <span>試し読み画像URL</span>
+          <textarea id="sampleImagesInput" rows="4" placeholder="https://doujin-assets.dmm.co.jp/digital/comic/d_740538/d_740538pr.jpg&#10;https://doujin-assets.dmm.co.jp/digital/comic/d_740538/d_740538jp-001.jpg"></textarea>
+          <small class="field-hint">1行1URL。DMM取り込み時は商品ページの試し読み画像を自動で入れます。</small>
+        </label>
+
+        <label class="field wide">
           <span>ジャンル</span>
           <textarea id="genresInput" rows="3" placeholder="制服&#10;処女&#10;巨乳"></textarea>
           <small class="field-hint">1行1タグ、またはスペース・読点「、」・カンマ「,」区切りで入力</small>
@@ -145,6 +151,24 @@
         <label class="field">
           <span>PR表記</span>
           <input id="prLabelInput" type="text" value="PR">
+        </label>
+
+        <div class="field checkbox-field">
+          <span>今週のおすすめ</span>
+          <label class="checkbox-row">
+            <input id="weeklyPickInput" type="checkbox">
+            <span>おすすめ枠に表示</span>
+          </label>
+        </div>
+
+        <label class="field">
+          <span>おすすめ表示順</span>
+          <input id="weeklyPickOrderInput" type="number" min="0" step="1" placeholder="0">
+        </label>
+
+        <label class="field wide">
+          <span>おすすめコメント</span>
+          <textarea id="editorNoteInput" rows="3" placeholder="自分の言葉で、なぜ今週推すのかを書く"></textarea>
         </label>
       </section>
 

@@ -162,6 +162,7 @@ async function main() {
         source_url: detail.url,
         affiliate_url: detail.url,
         thumbnail_url: detail.thumbnailUrl,
+        sample_images: detail.sampleImageUrls,
         genres: detail.genres,
         emotions: [],
         rights_status: "pending_review",
@@ -394,6 +395,7 @@ function hasImportDetails(article) {
   return Boolean(
     String(metadata.excerpt || "").trim() &&
       String(metadata.thumbnail_url || "").trim() &&
+      (metadata.sample_images || []).length &&
       (metadata.genres || []).length
   );
 }
@@ -407,12 +409,15 @@ function buildExistingArticleUpdate(article, detail, productId) {
   const nextAffiliateUrl = metadata.affiliate_url || detail.url || "";
   const nextThumbnailUrl = metadata.thumbnail_url || detail.thumbnailUrl || "";
   const nextGenres = currentGenres.length ? currentGenres : detail.genres || [];
+  const currentSampleImages = metadata.sample_images || [];
+  const nextSampleImages = mergeSampleImages(currentSampleImages, detail.sampleImageUrls || []);
 
   const hasChanges =
     nextExcerpt !== (metadata.excerpt || "") ||
     nextSourceUrl !== (metadata.source_url || "") ||
     nextAffiliateUrl !== (metadata.affiliate_url || "") ||
     nextThumbnailUrl !== (metadata.thumbnail_url || "") ||
+    !arraysEqual(nextSampleImages, currentSampleImages) ||
     !arraysEqual(nextGenres, currentGenres);
 
   if (!hasChanges) return null;
@@ -424,6 +429,7 @@ function buildExistingArticleUpdate(article, detail, productId) {
     source_url: nextSourceUrl,
     affiliate_url: nextAffiliateUrl,
     thumbnail_url: nextThumbnailUrl,
+    sample_images: nextSampleImages,
     genres: nextGenres,
     body: article.body || "",
     product_id: productId || metadata.product_id || "",
@@ -433,6 +439,12 @@ function buildExistingArticleUpdate(article, detail, productId) {
 function arraysEqual(left, right) {
   if (left.length !== right.length) return false;
   return left.every((value, index) => value === right[index]);
+}
+
+function mergeSampleImages(currentImages, importedImages) {
+  if (!currentImages.length) return importedImages;
+  if (!importedImages.length) return currentImages;
+  return unique([...currentImages, ...importedImages]);
 }
 
 async function fetchHtml(url, options = {}) {
@@ -534,12 +546,14 @@ function parseProductDetail(html, url, fallbackTitle) {
         .filter(Boolean)
     : [];
   const genres = unique([...currentGenres, ...legacyGenres]);
+  const thumbnailUrl = extractThumbnailUrl(html, url, fallbackTitle);
 
   return {
     url,
     genres,
     workComment: extractWorkComment(html),
-    thumbnailUrl: extractThumbnailUrl(html, url, fallbackTitle),
+    thumbnailUrl,
+    sampleImageUrls: extractSampleImageUrls(html, url, thumbnailUrl),
   };
 }
 
@@ -612,6 +626,64 @@ function extractThumbnailUrl(html, baseUrl, title) {
   }
 
   return "";
+}
+
+function extractSampleImageUrls(html, baseUrl, thumbnailUrl = "") {
+  const candidates = [];
+  const productId = extractProductId(thumbnailUrl) || extractProductId(baseUrl);
+  if (thumbnailUrl) candidates.push(thumbnailUrl);
+
+  const productPreviewRe = /<ul\b([^>]*)>([\s\S]*?)<\/ul>/giu;
+  for (const block of html.matchAll(productPreviewRe)) {
+    if (!hasClass(block[1], "productPreview")) continue;
+    candidates.push(...extractImageUrlsFromHtml(block[2], baseUrl));
+  }
+
+  if (candidates.length <= (thumbnailUrl ? 1 : 0)) {
+    candidates.push(...extractImageUrlsFromHtml(html, baseUrl));
+  }
+
+  return unique(
+    candidates
+      .map((url) => normalizeImageUrl(url))
+      .filter((url) => isSampleImageUrl(url) && isSameProductImage(url, productId))
+  );
+}
+
+function extractImageUrlsFromHtml(html, baseUrl) {
+  const urls = [];
+  for (const match of String(html || "").matchAll(/<a\b([^>]*)>/giu)) {
+    const href = getAttr(match[1], "href");
+    if (href) urls.push(absoluteUrl(href, baseUrl));
+  }
+  for (const match of String(html || "").matchAll(/<img\b([^>]*)>/giu)) {
+    const attrs = match[1];
+    const src = getAttr(attrs, "src") || getAttr(attrs, "data-src") || getAttr(attrs, "data-original");
+    if (src) urls.push(absoluteUrl(src, baseUrl));
+  }
+  return urls;
+}
+
+function normalizeImageUrl(value) {
+  try {
+    const url = new URL(decodeEntities(value));
+    url.hash = "";
+    return url.href;
+  } catch {
+    return decodeEntities(value);
+  }
+}
+
+function isSampleImageUrl(value) {
+  const url = String(value || "");
+  if (!/(?:doujin-assets|ebook-assets)\.dmm\.co\.jp\//iu.test(url)) return false;
+  return /\.(?:jpe?g|png|webp)(?:[?#].*)?$/iu.test(url);
+}
+
+function isSameProductImage(value, productId) {
+  if (!productId) return true;
+  const imageProductId = extractProductId(value);
+  return !imageProductId || normalizeKey(imageProductId) === normalizeKey(productId);
 }
 
 function extractAnchor(html) {

@@ -31,8 +31,14 @@ for (const item of articles) {
     source_url: metadata.source_url || "",
     affiliate_url: metadata.affiliate_url || "",
     thumbnail_url: metadata.thumbnail_url || "",
+    sample_images_json: JSON.stringify(metadata.sample_images || []),
     genres_json: JSON.stringify(metadata.genres || []),
     emotions_json: JSON.stringify(metadata.emotions || []),
+    weekly_pick: metadata.weekly_pick ? 1 : 0,
+    weekly_pick_order: Number.isInteger(Number(metadata.weekly_pick_order))
+      ? Number(metadata.weekly_pick_order)
+      : 0,
+    editor_note: metadata.editor_note || "",
     rights_status: metadata.rights_status || "pending_review",
     pr_label: metadata.pr_label || "PR",
     automation_ready: metadata.automation_ready ? 1 : 0,

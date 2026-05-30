@@ -10,6 +10,10 @@ CREATE TABLE IF NOT EXISTS works (
     source_url TEXT,
     affiliate_url TEXT,
     thumbnail_url TEXT,
+    sample_images_json TEXT NOT NULL DEFAULT '[]',
+    weekly_pick INTEGER NOT NULL DEFAULT 0,
+    weekly_pick_order INTEGER NOT NULL DEFAULT 0,
+    editor_note TEXT NOT NULL DEFAULT '',
     age_category TEXT NOT NULL DEFAULT 'adult'
         CHECK (age_category = 'adult'),
     review_status TEXT NOT NULL DEFAULT 'draft'
@@ -88,4 +92,3 @@ CREATE INDEX IF NOT EXISTS idx_posted_items_product_channel
 
 CREATE INDEX IF NOT EXISTS idx_sns_threads_work_channel
     ON sns_threads(work_id, channel);
-

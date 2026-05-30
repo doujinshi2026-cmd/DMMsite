@@ -341,6 +341,9 @@ function renderSiteIndex(articles, context = {}) {
   const filters = context.filters || {};
   const allArticles = context.allArticles || articles;
   const countSummary = renderCountSummary(articles.length, allArticles.length, filters);
+  const filtered = hasActiveFilters(filters);
+  const weeklyPicks = filtered ? [] : sortWeeklyPicks(allArticles.filter((article) => article.weekly_pick));
+  const listArticles = weeklyPicks.length ? articles.filter((article) => !article.weekly_pick) : articles;
   const circles = distinctValues(allArticles.map((article) => article.circle_name));
   const authors = distinctValues(
     allArticles
@@ -355,7 +358,7 @@ function renderSiteIndex(articles, context = {}) {
   );
   const breadcrumb = renderBreadcrumb(filters);
   const activeLabel = renderActiveFilterLabel(filters);
-  const cards = articles
+  const cards = listArticles
     .map((article) => {
       const labels =
         renderGenreTags((article.genres || []).slice(0, 8), filters) +
@@ -388,6 +391,7 @@ function renderSiteIndex(articles, context = {}) {
         ${countSummary}
         ${breadcrumb}
       </header>
+      ${renderWeeklyPickSection(weeklyPicks)}
       <div class="catalog-layout">
         <aside class="filter-panel">
           <form method="get" action="/site" class="filter-form">
@@ -432,18 +436,78 @@ function renderSiteIndex(articles, context = {}) {
   `);
 }
 
+function sortWeeklyPicks(articles) {
+  return [...articles].sort((a, b) => {
+    const leftOrder = toInteger(a.weekly_pick_order, 0);
+    const rightOrder = toInteger(b.weekly_pick_order, 0);
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    const leftDate = String(a.updated_at || a.published_at || a.file_updated_at || "");
+    const rightDate = String(b.updated_at || b.published_at || b.file_updated_at || "");
+    return rightDate.localeCompare(leftDate);
+  });
+}
+
+function renderWeeklyPickSection(articles) {
+  if (!articles.length) return "";
+  return `
+      <section class="weekly-picks" aria-labelledby="weekly-picks-heading">
+        <div class="section-heading">
+          <p>編集ピックアップ</p>
+          <h2 id="weekly-picks-heading">今週のおすすめ</h2>
+        </div>
+        <div class="weekly-pick-grid">
+          ${articles.map((article) => renderWeeklyPickCard(article)).join("")}
+        </div>
+      </section>
+  `;
+}
+
+function renderWeeklyPickCard(article) {
+  const productLink = productPageUrl(article);
+  const articleLink = `/site/posts/${encodeURIComponent(article.slug)}`;
+  const labels =
+    renderGenreTags((article.genres || []).slice(0, 6)) +
+    renderPlainTags((article.emotions || []).slice(0, 3));
+  const note = String(article.editor_note || article.excerpt || "").trim();
+  return `
+            <article class="weekly-pick-card">
+              ${renderSampleCarousel(article, productLink, "weekly")}
+              <div class="weekly-pick-body">
+                <p class="weekly-label">今週のおすすめ</p>
+                <h3><a href="${articleLink}">${escapeBreakableText(article.title)}</a></h3>
+                ${article.circle_name || article.author_name ? `<p class="work-meta">${escapeHtml([article.circle_name, article.author_name].filter(Boolean).join(" / "))}</p>` : ""}
+                ${note ? `<p class="editor-note">${escapeHtml(note)}</p>` : ""}
+                <div class="tags">${labels}</div>
+                <div class="pick-actions">
+                  <a class="ghost-link" href="${articleLink}">レビューを見る</a>
+                  ${productLink ? `<a class="pick-cta" href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer">作品ページ</a>` : ""}
+                </div>
+              </div>
+            </article>
+  `;
+}
+
 function renderCountSummary(visibleCount, totalCount, filters) {
-  const hasFilters = Boolean(
+  const hasFilters = hasActiveFilters(filters);
+  return `<p class="site-count">現在の作品数 <strong>${formatCount(totalCount)}</strong>件${hasFilters ? ` / 表示中 <strong>${formatCount(visibleCount)}</strong>件` : ""}</p>`;
+}
+
+function hasActiveFilters(filters = {}) {
+  return Boolean(
     filters.q ||
       filters.circle ||
       filters.author ||
       (filters.genres || []).length
   );
-  return `<p class="site-count">現在の作品数 <strong>${formatCount(totalCount)}</strong>件${hasFilters ? ` / 表示中 <strong>${formatCount(visibleCount)}</strong>件` : ""}</p>`;
 }
 
 function formatCount(value) {
   return Number(value || 0).toLocaleString("ja-JP");
+}
+
+function toInteger(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isInteger(number) ? number : fallback;
 }
 
 function renderArticlePage(article, options = {}) {
@@ -459,7 +523,9 @@ function renderArticlePage(article, options = {}) {
   const authorLink = metadata.author_name
     ? `<a href="${siteFilterUrl({ circle: metadata.circle_name, author: metadata.author_name })}">${escapeHtml(metadata.author_name)}</a>`
     : "";
-  const heroImage = metadata.thumbnail_url
+  const sampleImages = articleSampleImages(metadata);
+  const sampleViewer = sampleImages.length > 1 ? renderSampleCarousel(metadata, productLink, "article") : "";
+  const heroImage = !sampleViewer && metadata.thumbnail_url
     ? productLink
       ? `<a class="image-product-link hero-link" href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer" aria-label="商品ページを開く"><img class="hero-image" src="${escapeHtml(metadata.thumbnail_url)}" alt=""></a>`
       : `<img class="hero-image" src="${escapeHtml(metadata.thumbnail_url)}" alt="">`
@@ -476,13 +542,38 @@ function renderArticlePage(article, options = {}) {
           ${circleLink || authorLink ? `<p class="work-meta">${circleLink}${circleLink && authorLink ? " / " : ""}${authorLink}</p>` : ""}
           <div class="tags">${labels}</div>
         </header>
-        ${heroImage}
+        ${sampleViewer || heroImage}
         ${renderWorkComment(metadata.excerpt)}
         <div class="article-body">${body}</div>
         ${productLink ? `<p class="cta"><a href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer">作品ページを確認する</a></p>` : ""}
       </article>
     </main>
   `);
+}
+
+function renderSampleCarousel(article, productLink = "", variant = "") {
+  const images = articleSampleImages(article);
+  if (!images.length) return "";
+  const link = String(productLink || "").trim();
+  const className = ["sample-carousel", variant ? `sample-carousel-${variant}` : ""].filter(Boolean).join(" ");
+  const imageItems = images
+    .slice(0, 12)
+    .map((url, index) => {
+      const image = `<img src="${escapeHtml(url)}" alt="${escapeHtml(`${article.title || "作品"} 試し読み ${index + 1}`)}" loading="lazy">`;
+      return link
+        ? `<a class="sample-slide" href="${escapeHtml(link)}" target="_blank" rel="sponsored noopener noreferrer">${image}</a>`
+        : `<span class="sample-slide">${image}</span>`;
+    })
+    .join("");
+  return `
+        <div class="${className}" aria-label="試し読み画像">
+          ${imageItems}
+        </div>
+  `;
+}
+
+function articleSampleImages(article) {
+  return unique([article.thumbnail_url, ...(article.sample_images || [])].filter(Boolean));
 }
 
 function renderWorkComment(value) {
@@ -612,6 +703,10 @@ function normalizeFilterValues(value) {
       .map((item) => item.trim())
       .filter(Boolean)
   )];
+}
+
+function unique(values) {
+  return [...new Set(values)];
 }
 
 function pageShell(title, body) {
