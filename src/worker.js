@@ -12,6 +12,13 @@ const USER_AGENT =
 const STATUS_VALUES = new Set(["draft", "ready", "published", "archived"]);
 const TYPE_VALUES = new Set(["review", "column", "news", "list"]);
 const RIGHTS_VALUES = new Set(["pending_review", "approved_ad_material", "link_only"]);
+const ARTICLE_EDITORIAL_COLUMNS = [
+  ["sample_images_json", "sample_images_json TEXT NOT NULL DEFAULT '[]'"],
+  ["weekly_pick", "weekly_pick INTEGER NOT NULL DEFAULT 0"],
+  ["weekly_pick_order", "weekly_pick_order INTEGER NOT NULL DEFAULT 0"],
+  ["editor_note", "editor_note TEXT NOT NULL DEFAULT ''"],
+];
+let articleEditorialColumnsReady = false;
 
 export default {
   async fetch(request, env, ctx) {
@@ -261,7 +268,32 @@ async function articleCounts(env) {
   };
 }
 
+async function ensureArticleEditorialColumns(env) {
+  if (articleEditorialColumnsReady) return;
+
+  const { results } = await env.DB.prepare("PRAGMA table_info(articles)").all();
+  const existingColumns = new Set((results || []).map((row) => row.name));
+
+  for (const [columnName, definition] of ARTICLE_EDITORIAL_COLUMNS) {
+    if (existingColumns.has(columnName)) continue;
+    try {
+      await env.DB.prepare(`ALTER TABLE articles ADD COLUMN ${definition}`).run();
+    } catch (error) {
+      if (!/duplicate column name|already exists/iu.test(String(error?.message || ""))) {
+        throw error;
+      }
+    }
+  }
+
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_articles_weekly_pick ON articles(weekly_pick, weekly_pick_order)"
+  ).run();
+  articleEditorialColumnsReady = true;
+}
+
 async function saveArticle(env, input) {
+  await ensureArticleEditorialColumns(env);
+
   const oldSlug = input.old_slug ? slugify(input.old_slug) : "";
   const existing = oldSlug ? (await readArticle(env, oldSlug))?.metadata || {} : {};
   const metadata = normalizeArticle(input, existing);
