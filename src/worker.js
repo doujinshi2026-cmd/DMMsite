@@ -69,14 +69,14 @@ async function route(request, env) {
   }
 
   if (request.method === "GET" && pathname === "/site") {
-    const allArticles = (await listArticles(env)).filter(isPublicArticle);
+    const allArticles = sortArticlesByUpdatedAt((await listArticles(env)).filter(isPublicArticle));
     const filters = {
       q: String(url.searchParams.get("q") || "").trim(),
       circle: String(url.searchParams.get("circle") || "").trim(),
       author: String(url.searchParams.get("author") || "").trim(),
       genres: normalizeFilterValues(url.searchParams.getAll("genre")),
     };
-    const articles = allArticles.filter((article) => articleMatchesFilters(article, filters));
+    const articles = sortArticlesByUpdatedAt(allArticles.filter((article) => articleMatchesFilters(article, filters)));
     return sendHtml(renderSiteIndex(articles, { allArticles, filters }));
   }
 
@@ -248,6 +248,16 @@ async function readArticle(env, slug) {
     metadata: rowToMetadata(row),
     body: row.body || "",
     file_path: `d1:articles/${row.slug}`,
+  };
+}
+
+async function articleCounts(env) {
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'published' THEN 1 ELSE 0 END) AS published FROM articles"
+  ).first();
+  return {
+    total: Number(row?.total || 0),
+    published: Number(row?.published || 0),
   };
 }
 
@@ -466,8 +476,12 @@ async function importDmmRanking(env, options = {}) {
     skipped: 0,
     deferred: 0,
     failed: 0,
+    counts_before: null,
+    counts_after: null,
     items: [],
   };
+
+  summary.counts_before = await articleCounts(env);
 
   const rankingResult = await fetchRankingItems(rankingUrl, limit, delayMs);
   const rankingItems = rankingResult.items;
@@ -607,6 +621,8 @@ async function importDmmRanking(env, options = {}) {
     }
   }
 
+  summary.counts_after = dryRun ? summary.counts_before : await articleCounts(env);
+
   console.log(
     JSON.stringify({
       level: summary.failed ? "warn" : "info",
@@ -619,6 +635,8 @@ async function importDmmRanking(env, options = {}) {
       skipped: summary.skipped,
       deferred: summary.deferred,
       failed: summary.failed,
+      counts_before: summary.counts_before,
+      counts_after: summary.counts_after,
     })
   );
 
@@ -1102,9 +1120,19 @@ function isPublicArticle(article) {
   return article?.status === "published";
 }
 
+function sortArticlesByUpdatedAt(articles) {
+  return [...articles].sort((a, b) => {
+    const left = String(a.updated_at || a.published_at || a.file_updated_at || "");
+    const right = String(b.updated_at || b.published_at || b.file_updated_at || "");
+    if (left !== right) return right.localeCompare(left);
+    return String(a.title || a.slug || "").localeCompare(String(b.title || b.slug || ""), "ja");
+  });
+}
+
 function renderSiteIndex(articles, context = {}) {
   const filters = context.filters || {};
   const allArticles = context.allArticles || articles;
+  const countSummary = renderCountSummary(articles.length, allArticles.length, filters);
   const circles = distinctValues(allArticles.map((article) => article.circle_name));
   const authors = distinctValues(
     allArticles
@@ -1149,9 +1177,9 @@ function renderSiteIndex(articles, context = {}) {
       <header class="site-header">
         <p>18歳未満閲覧禁止 / 広告・PR</p>
         <h1>R18ブックス・同人誌レビューガイド</h1>
+        ${countSummary}
         ${breadcrumb}
       </header>
-      ${renderSiteDisclosure()}
       <div class="catalog-layout">
         <aside class="filter-panel">
           <form method="get" action="/site" class="filter-form">
@@ -1229,28 +1257,24 @@ function renderArticlePage(article, options = {}) {
         ${heroImage}
         ${renderWorkComment(metadata.excerpt)}
         <div class="article-body">${body}</div>
-        ${productLink ? renderAffiliateNotice(metadata.pr_label) : ""}
-        ${productLink ? `<p class="cta"><a href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer">広告リンクで作品ページを確認する</a></p>` : ""}
+        ${productLink ? `<p class="cta"><a href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer">作品ページを確認する</a></p>` : ""}
       </article>
     </main>
   `);
 }
 
-function renderSiteDisclosure() {
-  return `
-      <section class="site-disclosure" aria-label="広告とサイト運営の表示">
-        <p><strong>広告・PR</strong> 当サイトはDMM/FANZAアフィリエイト広告を利用しています。商品リンクから購入・登録等が発生した場合、運営者に報酬が支払われることがあります。</p>
-        <p>当サイトはDMM/FANZA公式サイトではありません。掲載内容は成人向け作品の紹介です。18歳未満の方は閲覧できません。</p>
-      </section>
-  `;
+function renderCountSummary(visibleCount, totalCount, filters) {
+  const hasFilters = Boolean(
+    filters.q ||
+      filters.circle ||
+      filters.author ||
+      (filters.genres || []).length
+  );
+  return `<p class="site-count">現在の作品数 <strong>${formatCount(totalCount)}</strong>件${hasFilters ? ` / 表示中 <strong>${formatCount(visibleCount)}</strong>件` : ""}</p>`;
 }
 
-function renderAffiliateNotice(label = "PR") {
-  return `
-        <section class="affiliate-notice" aria-label="広告リンクの表示">
-          <p><strong>${escapeHtml(label || "PR")}</strong> ここから先はDMM/FANZAの商品ページです。リンク先での購入・登録等により報酬が発生する場合があります。</p>
-        </section>
-  `;
+function formatCount(value) {
+  return Number(value || 0).toLocaleString("ja-JP");
 }
 
 function renderWorkComment(value) {

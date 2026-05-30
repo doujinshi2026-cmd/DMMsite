@@ -546,6 +546,21 @@ textarea:focus {
   word-break: break-all;
 }
 
+.site-count {
+  align-items: baseline;
+  color: #2f3b42;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 14px;
+  gap: 6px;
+  margin: 8px 0 10px;
+}
+
+.site-count strong {
+  color: var(--accent-strong);
+  font-size: 18px;
+}
+
 .post-grid {
   display: grid;
   gap: 16px;

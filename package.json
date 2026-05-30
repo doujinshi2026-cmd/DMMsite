@@ -18,7 +18,9 @@
     "cf:d1:seed:local": "npm run cf:d1:seed && npx wrangler d1 execute dmmsite-db --local --file=database/d1-seed.sql",
     "cf:d1:seed:remote": "npm run cf:config && npm run cf:d1:seed && npx wrangler d1 execute dmmsite-db --remote --file=database/d1-seed.sql",
     "cf:dmm:import": "node scripts/call-cloudflare-dmm-import.mjs",
-    "cf:dmm:import:dry": "node scripts/call-cloudflare-dmm-import.mjs --dry-run"
+    "cf:dmm:import:dry": "node scripts/call-cloudflare-dmm-import.mjs --dry-run",
+    "works:update": "node scripts/call-cloudflare-dmm-import.mjs",
+    "works:update:dry": "node scripts/call-cloudflare-dmm-import.mjs --dry-run"
   },
   "devDependencies": {
     "wrangler": "^4.94.0"

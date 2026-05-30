@@ -88,19 +88,29 @@ database/d1-schema.sql  Cloudflare D1用の記事テーブル
 src/worker.js           Cloudflare Workers用の公開サイト/API/Cron
 ```
 
-## DMMランキングから自動作成
+## DMMランキング取り込み
 
 24時間人気ランキングをページ送り込みで上位100件まで候補として確認し、未投稿の作品はレビュー記事として追加し、既存記事の抜粋が空なら作品コメントで補完できます。
 制限対策として、Cloudflare本番では作品詳細ページの取得を1回あたり最大40件に抑え、詳細ページ同士のリクエスト間に750msの待機を入れています。
 
+本番の作品数を増やす標準ルートはCloudflare WorkerのD1更新です。`content/posts/*.md` を増やしてデプロイする運用ではありません。
+
 ```powershell
-npm run dmm:import
+npm run works:update
 ```
 
-動作確認だけ行い、記事ファイルを作らない場合は次を使います。
+`works:update` はデプロイ済みWorkerの `/api/dmm/import` をBasic認証付きで呼びます。ローカルの `.env` に次を入れてください。
+
+```text
+CLOUDFLARE_WORKER_URL=https://dmmsite.doujinshi2026.workers.dev
+BLOG_CMS_USER=admin
+BLOG_CMS_PASSWORD=CloudflareにSecret登録したパスワード
+```
+
+動作確認だけ行い、D1を書き換えない場合は次を使います。
 
 ```powershell
-npm run dmm:import:dry
+npm run works:update:dry
 ```
 
 取り込み内容:
@@ -124,6 +134,13 @@ npm run dmm:import:dry
 現在の取得方法は、DMM/FANZAのHTMLページを `fetch` で取得し、ランキング名・サークル名・作品コメント・ジャンル・サムネイルURLなどをHTMLから読み取る方式です。
 これは公式APIではなく、技術的にはWebスクレイピングに分類されます。画像ファイル自体は保存せず、商品ページ内の画像URLを記事データに保存しています。
 
+ローカルのMarkdownへ取り込む旧ルートは、ローカル表示確認や初期データ作成用です。本番D1の作品数は増えません。
+
+```powershell
+npm run dmm:import
+npm run dmm:import:dry
+```
+
 Windowsで毎日00:00と12:00に実行する場合は、タスクスケジューラへ登録します。
 
 ```powershell
@@ -139,7 +156,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\register-dmm-ranking-task.ps1
 一度に確認する候補数や詳細取得数を変える場合は、次のように指定できます。
 
 ```powershell
-npm run dmm:import -- --limit 100 --detail-limit 40 --delay-ms 750
+npm run works:update -- --limit 100 --detail-limit 40 --delay-ms 750
 ```
 
 ## Cloudflare Workersで00:00 / 12:00自動更新
@@ -153,7 +170,7 @@ Cloudflare側の構成:
 - D1 database: `dmmsite-db`
 - 公開サイト: `/site`
 - 管理画面: `/admin`
-- 手動取り込み: `/api/dmm/import?dryRun=1`
+- 手動取り込み: `npm run works:update` または `/api/dmm/import`
 - Cron: `0 15 * * *`, `0 3 * * *`
 - 候補件数: `DMM_RANKING_LIMIT=100`
 - 1回あたりの詳細取得上限: `DMM_RANKING_DETAIL_LIMIT=40`
@@ -191,7 +208,7 @@ D1のテーブルを作成します。
 npm run cf:d1:init:remote
 ```
 
-既存の `content/posts/*.md` をD1へ移す場合は、seed SQLを生成して流し込みます。
+既存の `content/posts/*.md` をD1へ移す場合だけ、seed SQLを生成して流し込みます。これは初回移行用で、日々の作品追加はWorkerのCronと `npm run works:update` がD1へ直接書き込みます。
 
 ```powershell
 npm run cf:d1:seed
@@ -234,8 +251,8 @@ npm run cf:deploy
 
 - `https://<your-worker-domain>/site` で公開サイトを確認
 - `https://<your-worker-domain>/admin` で管理画面を確認
-- `/api/dmm/import?dryRun=1` で新規候補だけを確認
-- `/api/dmm/import` で手動取り込み
+- `npm run works:update:dry` で新規候補だけを確認
+- `npm run works:update` でD1へ手動取り込み
 - Cloudflare Dashboard の Workers & Pages > `dmmsite` > Settings > Triggers でCronを確認
 - Workers Logsで `dmm-ranking-import` のログを確認
 
@@ -244,7 +261,7 @@ npm run cf:deploy
 - 申請前は自分で書いた独自レビューを増やします。
 - 画像は公式に許諾された広告素材、または利用許諾が明確な素材だけを使います。
 - 記事上部とCTA付近に `PR` または `広告` の表記を入れます。
-- ローカル作業ではMarkdown、Cloudflare本番ではD1を記事データの保存先にします。
+- 本番の作品数はD1を正とします。Markdown seedは初回移行とローカル確認だけに使います。
 
 ## DMMアフィリエイト申請前チェック
 

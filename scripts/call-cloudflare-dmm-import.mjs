@@ -60,6 +60,8 @@ function summarize(payload) {
     skipped: payload.skipped,
     deferred: payload.deferred,
     failed: payload.failed,
+    counts_before: payload.counts_before,
+    counts_after: payload.counts_after,
     detail_limit: payload.detail_limit,
     detail_requests: payload.detail_requests,
     request_delay_ms: payload.request_delay_ms,
