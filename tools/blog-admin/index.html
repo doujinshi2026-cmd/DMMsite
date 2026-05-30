@@ -24,16 +24,36 @@
         <input id="searchInput" type="search" placeholder="タイトル、サークル、作者、タグ">
       </label>
 
-      <label class="field">
-        <span>状態</span>
-        <select id="statusFilter">
-          <option value="all">すべて</option>
-          <option value="draft">下書き</option>
-          <option value="ready">公開準備</option>
-          <option value="published">公開</option>
-          <option value="archived">保管</option>
-        </select>
+      <div class="article-controls">
+        <label class="field">
+          <span>状態</span>
+          <select id="statusFilter">
+            <option value="all">すべて</option>
+            <option value="draft">下書き</option>
+            <option value="ready">公開準備</option>
+            <option value="published">公開</option>
+            <option value="archived">保管</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>並び替え</span>
+          <select id="sortFilter">
+            <option value="updated_desc">更新が新しい</option>
+            <option value="published_desc">公開が新しい</option>
+            <option value="title_asc">タイトル順</option>
+            <option value="weekly_first">おすすめ優先</option>
+          </select>
+        </label>
+      </div>
+
+      <label class="compact-toggle">
+        <input id="weeklyOnlyInput" type="checkbox">
+        <span>おすすめだけ表示</span>
       </label>
+
+      <div class="article-stats" id="articleStats"></div>
+      <p class="list-meta" id="articleListMeta"></p>
 
       <div class="article-list" id="articleList"></div>
     </aside>

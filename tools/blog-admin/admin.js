@@ -54,6 +54,8 @@ function bindEvents() {
   $("restoreDraftButton").addEventListener("click", restoreLocalDraft);
   $("searchInput").addEventListener("input", renderArticleList);
   $("statusFilter").addEventListener("change", renderArticleList);
+  $("sortFilter").addEventListener("change", renderArticleList);
+  $("weeklyOnlyInput").addEventListener("change", renderArticleList);
   $("templateButton").addEventListener("click", insertReviewTemplate);
   $("prBlockButton").addEventListener("click", () => insertText("> PR: このページには広告リンクを含みます。\n\n"));
   $("ctaButton").addEventListener("click", insertCtaBlock);
@@ -115,11 +117,14 @@ async function loadMedia() {
 function renderArticleList() {
   const query = $("searchInput").value.trim().toLowerCase();
   const status = $("statusFilter").value;
+  const sort = $("sortFilter").value;
+  const weeklyOnly = $("weeklyOnlyInput").checked;
   const list = $("articleList");
   list.innerHTML = "";
 
   const filtered = state.articles.filter((article) => {
     if (status !== "all" && article.status !== status) return false;
+    if (weeklyOnly && !article.weekly_pick) return false;
     if (!query) return true;
     return [
       article.title,
@@ -134,10 +139,13 @@ function renderArticleList() {
       .join(" ")
       .toLowerCase()
       .includes(query);
-  });
+  }).sort((left, right) => compareArticles(left, right, sort));
+
+  renderArticleStats(filtered);
+  $("articleListMeta").textContent = `${filtered.length.toLocaleString("ja-JP")} / ${state.articles.length.toLocaleString("ja-JP")}件を表示`;
 
   if (!filtered.length) {
-    list.innerHTML = '<p class="meta">記事がありません。</p>';
+    list.innerHTML = '<p class="empty-list">条件に一致する記事がありません。</p>';
     return;
   }
 
@@ -145,19 +153,78 @@ function renderArticleList() {
     const button = document.createElement("button");
     button.className = `article-item${article.slug === state.currentSlug ? " active" : ""}`;
     button.type = "button";
+    const dateLabel = formatDateLabel(article.updated_at || article.published_at || article.file_updated_at);
+    const sampleCount = (article.sample_images || []).length;
+    const hasBody = article.body_chars === undefined ? true : Number(article.body_chars || 0) > 0;
     button.innerHTML = `
-      <strong>${escapeHtml(article.title || "Untitled")}</strong>
-      <small>${escapeHtml(article.slug)}</small>
-      ${article.circle_name || article.author_name ? `<small>${escapeHtml([article.circle_name, article.author_name].filter(Boolean).join(" / "))}</small>` : ""}
-      <span class="badge-row">
-        <span class="badge status-${escapeHtml(article.status || "draft")}">${statusLabel(article.status)}</span>
-        ${article.weekly_pick ? '<span class="badge pick-badge">おすすめ</span>' : ""}
-        ${(article.genres || []).slice(0, 2).map((tag) => `<span class="badge">${escapeHtml(tag)}</span>`).join("")}
+      <span class="article-thumb">${article.thumbnail_url ? `<img src="${escapeHtml(article.thumbnail_url)}" alt="">` : ""}</span>
+      <span class="article-item-main">
+        <span class="article-title">${escapeHtml(article.title || "Untitled")}</span>
+        <span class="article-subline">
+          ${escapeHtml([article.circle_name, article.author_name].filter(Boolean).join(" / ") || "サークル未入力")}
+        </span>
+        <span class="article-slug">${escapeHtml(article.slug)}</span>
+        <span class="article-badges">
+          <span class="badge status-${escapeHtml(article.status || "draft")}">${statusLabel(article.status)}</span>
+          ${article.weekly_pick ? '<span class="badge pick-badge">おすすめ</span>' : ""}
+          ${sampleCount ? `<span class="badge asset-badge">試読${sampleCount}</span>` : '<span class="badge warn-badge">試読なし</span>'}
+          ${hasBody ? "" : '<span class="badge warn-badge">本文なし</span>'}
+          ${(article.genres || []).slice(0, 2).map((tag) => `<span class="badge">${escapeHtml(tag)}</span>`).join("")}
+        </span>
+      </span>
+      <span class="article-item-side">
+        <span>${escapeHtml(dateLabel)}</span>
+        <span>${escapeHtml(rightsShortLabel(article.rights_status))}</span>
       </span>
     `;
     button.addEventListener("click", () => openArticle(article.slug));
     list.appendChild(button);
   }
+}
+
+function renderArticleStats(filtered) {
+  const counts = statusCounts(state.articles);
+  const visibleCounts = statusCounts(filtered);
+  const weeklyCount = state.articles.filter((article) => article.weekly_pick).length;
+  $("articleStats").innerHTML = `
+    <span><strong>${state.articles.length.toLocaleString("ja-JP")}</strong>全体</span>
+    <span><strong>${counts.published.toLocaleString("ja-JP")}</strong>公開</span>
+    <span><strong>${counts.ready.toLocaleString("ja-JP")}</strong>準備</span>
+    <span><strong>${counts.draft.toLocaleString("ja-JP")}</strong>下書き</span>
+    <span><strong>${weeklyCount.toLocaleString("ja-JP")}</strong>おすすめ</span>
+    <span><strong>${filtered.length.toLocaleString("ja-JP")}</strong>表示中</span>
+    ${visibleCounts.archived ? `<span><strong>${visibleCounts.archived.toLocaleString("ja-JP")}</strong>保管</span>` : ""}
+  `;
+}
+
+function statusCounts(articles) {
+  return articles.reduce(
+    (counts, article) => {
+      const key = article.status || "draft";
+      counts[key] = (counts[key] || 0) + 1;
+      return counts;
+    },
+    { draft: 0, ready: 0, published: 0, archived: 0 }
+  );
+}
+
+function compareArticles(left, right, sort) {
+  if (sort === "title_asc") {
+    return String(left.title || left.slug || "").localeCompare(String(right.title || right.slug || ""), "ja");
+  }
+  if (sort === "published_desc") {
+    return String(right.published_at || right.updated_at || "").localeCompare(String(left.published_at || left.updated_at || ""));
+  }
+  if (sort === "weekly_first") {
+    const pickDiff = Number(Boolean(right.weekly_pick)) - Number(Boolean(left.weekly_pick));
+    if (pickDiff) return pickDiff;
+    const orderDiff = Number(left.weekly_pick_order || 0) - Number(right.weekly_pick_order || 0);
+    if (orderDiff) return orderDiff;
+  }
+  const leftDate = String(left.updated_at || left.published_at || left.file_updated_at || "");
+  const rightDate = String(right.updated_at || right.published_at || right.file_updated_at || "");
+  if (leftDate !== rightDate) return rightDate.localeCompare(leftDate);
+  return String(left.title || left.slug || "").localeCompare(String(right.title || right.slug || ""), "ja");
 }
 
 async function openArticle(slug) {
@@ -708,6 +775,18 @@ function fromDatetimeLocal(value) {
   return Number.isNaN(date.getTime()) ? "" : date.toISOString();
 }
 
+function formatDateLabel(value) {
+  if (!value) return "日時なし";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "日時なし";
+  return new Intl.DateTimeFormat("ja-JP", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -732,6 +811,14 @@ function rightsLabel(value) {
     approved_ad_material: "広告素材として利用可",
     link_only: "リンクのみ",
   }[value] || "確認中";
+}
+
+function rightsShortLabel(value) {
+  return {
+    pending_review: "権利確認中",
+    approved_ad_material: "広告素材",
+    link_only: "リンクのみ",
+  }[value] || "権利確認中";
 }
 
 function productPageUrl(article) {
