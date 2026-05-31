@@ -111,6 +111,10 @@ async function route(request, response) {
     return sendFile(response, path.join(ADMIN_DIR, "admin.js"));
   }
 
+  if (request.method === "GET" && pathname === "/site.js") {
+    return sendFile(response, path.join(ADMIN_DIR, "site.js"));
+  }
+
   if (request.method === "GET" && pathname.startsWith("/uploads/")) {
     return sendPublicUpload(response, pathname);
   }
@@ -516,7 +520,7 @@ function renderArticlePage(article, options = {}) {
   const labels =
     renderGenreTags(metadata.genres || []) +
     renderPlainTags(metadata.emotions || []);
-  const body = markdownToHtml(article.body, { imageLinkUrl: productLink });
+  const body = markdownToHtml(articleBodyMarkdown(metadata, article.body), { imageLinkUrl: productLink });
   const circleLink = metadata.circle_name
     ? `<a href="${siteFilterUrl({ circle: metadata.circle_name })}">${escapeHtml(metadata.circle_name)}</a>`
     : "";
@@ -524,7 +528,7 @@ function renderArticlePage(article, options = {}) {
     ? `<a href="${siteFilterUrl({ circle: metadata.circle_name, author: metadata.author_name })}">${escapeHtml(metadata.author_name)}</a>`
     : "";
   const sampleImages = articleSampleImages(metadata);
-  const sampleViewer = sampleImages.length > 1 ? renderSampleCarousel(metadata, productLink, "article") : "";
+  const sampleViewer = sampleImages.length ? renderSampleCarousel(metadata, productLink, "article") : "";
   const heroImage = !sampleViewer && metadata.thumbnail_url
     ? productLink
       ? `<a class="image-product-link hero-link" href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer" aria-label="商品ページを開く"><img class="hero-image" src="${escapeHtml(metadata.thumbnail_url)}" alt=""></a>`
@@ -543,7 +547,6 @@ function renderArticlePage(article, options = {}) {
           <div class="tags">${labels}</div>
         </header>
         ${sampleViewer || heroImage}
-        ${renderWorkComment(metadata.excerpt)}
         <div class="article-body">${body}</div>
         ${productLink ? `<p class="cta"><a href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer">作品ページを確認する</a></p>` : ""}
       </article>
@@ -552,12 +555,11 @@ function renderArticlePage(article, options = {}) {
 }
 
 function renderSampleCarousel(article, productLink = "", variant = "") {
-  const images = articleSampleImages(article);
+  const images = articleSampleImages(article).slice(0, 12);
   if (!images.length) return "";
   const link = String(productLink || "").trim();
   const className = ["sample-carousel", variant ? `sample-carousel-${variant}` : ""].filter(Boolean).join(" ");
   const imageItems = images
-    .slice(0, 12)
     .map((url, index) => {
       const image = `<img src="${escapeHtml(url)}" alt="${escapeHtml(`${article.title || "作品"} 試し読み ${index + 1}`)}" loading="lazy">`;
       return link
@@ -565,15 +567,81 @@ function renderSampleCarousel(article, productLink = "", variant = "") {
         : `<span class="sample-slide">${image}</span>`;
     })
     .join("");
+  const controls = images.length > 1
+    ? `
+          <button class="sample-nav sample-nav-prev" type="button" aria-label="前の試し読み画像" data-sample-nav="-1">&#8249;</button>
+          <button class="sample-nav sample-nav-next" type="button" aria-label="次の試し読み画像" data-sample-nav="1">&#8250;</button>
+          <p class="sample-page-indicator"><span data-sample-page>1</span> / <span data-sample-total>${images.length}</span></p>
+    `
+    : "";
   return `
-        <div class="${className}" aria-label="試し読み画像">
-          ${imageItems}
+        <div class="sample-carousel-shell${variant ? ` sample-carousel-shell-${variant}` : ""}">
+          <div class="${className}" aria-label="試し読み画像" tabindex="0">
+            ${imageItems}
+          </div>
+          ${controls}
         </div>
   `;
 }
 
 function articleSampleImages(article) {
   return unique([article.thumbnail_url, ...(article.sample_images || [])].filter(Boolean));
+}
+
+function articleBodyMarkdown(metadata, body) {
+  const markdown = String(body || "");
+  if (!markdown.trim()) return defaultArticleBodyMarkdown(metadata);
+
+  const comment = String(metadata.excerpt || "").trim();
+  if (!comment || hasWorkCommentSection(markdown)) return markdown;
+
+  return insertWorkCommentSection(markdown, comment);
+}
+
+function defaultArticleBodyMarkdown(metadata = {}) {
+  const genres = Array.isArray(metadata.genres) ? metadata.genres : normalizeFilterValues(metadata.genres || "");
+  const comment = String(metadata.excerpt || "").trim();
+  const lines = [
+    "> PR: このページには広告リンクを含む場合があります。",
+    "",
+    "## 作品コメント",
+    "",
+  ];
+
+  if (comment) {
+    lines.push(comment, "");
+  }
+
+  lines.push(
+    "## 作品の基本情報",
+    "",
+    `- 作品名: ${metadata.product_title || metadata.title || ""}`,
+    `- サークル: ${metadata.circle_name || ""}`,
+    `- 作者: ${metadata.author_name || ""}`,
+    `- ジャンル: ${genres.join("、")}`,
+    "",
+    "## 続きが気になる場合",
+    "",
+    "サンプルや販売ページで、絵柄・雰囲気・注意事項を確認してから判断してください。",
+    ""
+  );
+
+  return lines.join("\n");
+}
+
+function hasWorkCommentSection(markdown) {
+  return /^#{1,3}\s*作品コメント\s*$/mu.test(String(markdown || ""));
+}
+
+function insertWorkCommentSection(markdown, comment) {
+  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+  let index = 0;
+  while (index < lines.length && (!lines[index].trim() || lines[index].trimStart().startsWith(">"))) {
+    index += 1;
+  }
+
+  lines.splice(index, 0, "## 作品コメント", "", comment, "");
+  return lines.join("\n");
 }
 
 function renderWorkComment(value) {
@@ -720,6 +788,7 @@ function pageShell(title, body) {
 </head>
 <body class="site-preview">
 ${body}
+<script src="/site.js" defer></script>
 </body>
 </html>`;
 }

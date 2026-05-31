@@ -168,7 +168,14 @@ async function main() {
         rights_status: "pending_review",
         pr_label: "PR",
         automation_ready: true,
-        body: "",
+        body: defaultArticleBodyMarkdown({
+          title: item.title,
+          excerpt: detail.workComment,
+          product_title: item.title,
+          circle_name: item.circleName,
+          author_name: "",
+          genres: detail.genres,
+        }),
       };
 
       if (dryRun) {
@@ -422,16 +429,20 @@ function buildExistingArticleUpdate(article, detail, productId) {
 
   if (!hasChanges) return null;
 
-  return {
+  const nextMetadata = {
     ...metadata,
-    old_slug: metadata.slug,
     excerpt: nextExcerpt,
     source_url: nextSourceUrl,
     affiliate_url: nextAffiliateUrl,
     thumbnail_url: nextThumbnailUrl,
     sample_images: nextSampleImages,
     genres: nextGenres,
-    body: article.body || "",
+  };
+
+  return {
+    ...nextMetadata,
+    old_slug: metadata.slug,
+    body: articleBodyMarkdown(nextMetadata, article.body),
     product_id: productId || metadata.product_id || "",
   };
 }
@@ -445,6 +456,70 @@ function mergeSampleImages(currentImages, importedImages) {
   if (!currentImages.length) return importedImages;
   if (!importedImages.length) return currentImages;
   return unique([...currentImages, ...importedImages]);
+}
+
+function articleBodyMarkdown(metadata, body) {
+  const markdown = String(body || "");
+  if (!markdown.trim()) return defaultArticleBodyMarkdown(metadata);
+
+  const comment = String(metadata.excerpt || "").trim();
+  if (!comment || hasWorkCommentSection(markdown)) return markdown;
+
+  return insertWorkCommentSection(markdown, comment);
+}
+
+function defaultArticleBodyMarkdown(metadata = {}) {
+  const genres = listValues(metadata.genres);
+  const comment = String(metadata.excerpt || "").trim();
+  const lines = [
+    "> PR: このページには広告リンクを含む場合があります。",
+    "",
+    "## 作品コメント",
+    "",
+  ];
+
+  if (comment) {
+    lines.push(comment, "");
+  }
+
+  lines.push(
+    "## 作品の基本情報",
+    "",
+    `- 作品名: ${metadata.product_title || metadata.title || ""}`,
+    `- サークル: ${metadata.circle_name || ""}`,
+    `- 作者: ${metadata.author_name || ""}`,
+    `- ジャンル: ${genres.join("、")}`,
+    "",
+    "## 続きが気になる場合",
+    "",
+    "サンプルや販売ページで、絵柄・雰囲気・注意事項を確認してから判断してください。",
+    ""
+  );
+
+  return lines.join("\n");
+}
+
+function hasWorkCommentSection(markdown) {
+  return /^#{1,3}\s*作品コメント\s*$/mu.test(String(markdown || ""));
+}
+
+function insertWorkCommentSection(markdown, comment) {
+  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+  let index = 0;
+  while (index < lines.length && (!lines[index].trim() || lines[index].trimStart().startsWith(">"))) {
+    index += 1;
+  }
+
+  lines.splice(index, 0, "## 作品コメント", "", comment, "");
+  return lines.join("\n");
+}
+
+function listValues(value) {
+  const values = Array.isArray(value) ? value : [value];
+  return values
+    .flatMap((item) => String(item || "").split(/[\s\u3000,、，]+/u))
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 async function fetchHtml(url, options = {}) {

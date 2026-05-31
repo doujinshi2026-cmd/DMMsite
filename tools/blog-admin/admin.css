@@ -782,7 +782,7 @@ textarea:focus {
   border-radius: 8px;
   display: grid;
   gap: 18px;
-  grid-template-columns: minmax(260px, 0.82fr) minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1fr);
   padding: 16px;
 }
 
@@ -856,16 +856,26 @@ textarea:focus {
   background: var(--accent-strong);
 }
 
+.sample-carousel-shell {
+  min-width: 0;
+  position: relative;
+}
+
 .sample-carousel {
   display: grid;
-  gap: 10px;
-  grid-auto-columns: minmax(210px, 46%);
+  gap: 12px;
+  grid-auto-columns: 100%;
   grid-auto-flow: column;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
-  padding: 0 0 10px;
+  padding: 0;
+  scroll-behavior: smooth;
   scroll-snap-type: inline mandatory;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+
+.sample-carousel::-webkit-scrollbar {
+  display: none;
 }
 
 .sample-slide {
@@ -880,6 +890,7 @@ textarea:focus {
   overflow: hidden;
   scroll-snap-align: start;
   text-decoration: none;
+  width: 100%;
 }
 
 .sample-slide:hover {
@@ -895,8 +906,70 @@ textarea:focus {
 }
 
 .sample-carousel-article {
-  grid-auto-columns: minmax(240px, 42%);
-  margin: 18px 0 0;
+  margin: 0;
+}
+
+.sample-carousel-shell-article {
+  margin: 24px auto 0;
+  max-width: 680px;
+}
+
+.sample-carousel-shell-weekly {
+  align-self: start;
+}
+
+.sample-nav {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #d8d2cc;
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(24, 31, 35, 0.16);
+  color: #1d2a30;
+  cursor: pointer;
+  display: flex;
+  font-size: 28px;
+  height: 42px;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 42px;
+  z-index: 2;
+}
+
+.sample-nav:hover:not(:disabled) {
+  background: #fff;
+  border-color: #b4c4ca;
+}
+
+.sample-nav:disabled {
+  cursor: default;
+  opacity: 0.36;
+}
+
+.sample-nav-prev {
+  left: 10px;
+}
+
+.sample-nav-next {
+  right: 10px;
+}
+
+.sample-page-indicator {
+  background: rgba(29, 42, 48, 0.84);
+  border-radius: 999px;
+  bottom: 12px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  margin: 0;
+  padding: 7px 10px;
+  position: absolute;
+  right: 12px;
+  z-index: 2;
 }
 
 .post-grid {
@@ -1327,7 +1400,12 @@ textarea:focus {
 
   .sample-carousel,
   .sample-carousel-article {
-    grid-auto-columns: minmax(170px, 78%);
+    grid-auto-columns: 100%;
+  }
+
+  .sample-nav {
+    height: 36px;
+    width: 36px;
   }
 }
 
@@ -1354,6 +1432,7 @@ textarea:focus {
 
   .article-shell > article,
   .article-shell .site-header,
+  .article-shell .sample-carousel-shell-article,
   .article-shell .hero-link,
   .article-shell > article > .hero-image,
   .article-body,

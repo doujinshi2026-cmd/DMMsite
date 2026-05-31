@@ -260,7 +260,7 @@ function fillForm(metadata, body) {
   fields.weekly_pick.checked = Boolean(metadata.weekly_pick);
   fields.weekly_pick_order.value = metadata.weekly_pick_order || "";
   fields.editor_note.value = metadata.editor_note || "";
-  fields.body.value = body || "";
+  fields.body.value = articleBodyText(metadata, body);
 }
 
 function newArticle() {
@@ -385,30 +385,7 @@ function openPreviewPage() {
 }
 
 function insertReviewTemplate() {
-  const title = fields.product_title.value || fields.title.value || "作品名";
-  insertText(`## 作品の基本情報
-
-- 作品名: ${title}
-- サークル: ${fields.circle_name.value || ""}
-- 作者: ${fields.author_name.value || ""}
-- ジャンル: ${fields.genres.value || ""}
-
-## この記事で見るポイント
-
-- 雰囲気:
-- 関係性:
-- 読後感:
-
-## 感想
-
-
-## 向いている読者
-
-
-## 注意点
-
-
-`);
+  insertText(defaultArticleBody(collectArticle()));
 }
 
 function insertCtaBlock() {
@@ -417,6 +394,63 @@ function insertCtaBlock() {
 サンプルや販売ページで、絵柄・雰囲気・注意事項を確認してから判断してください。
 
 `);
+}
+
+function defaultArticleBody(article = {}) {
+  const title = article.product_title || article.title || "";
+  const genres = Array.isArray(article.genres) ? article.genres : splitList(article.genres || "");
+  const comment = String(article.excerpt || "").trim();
+  const lines = [
+    "> PR: このページには広告リンクを含む場合があります。",
+    "",
+    "## 作品コメント",
+    "",
+  ];
+
+  if (comment) {
+    lines.push(comment, "");
+  }
+
+  lines.push(
+    "## 作品の基本情報",
+    "",
+    `- 作品名: ${title}`,
+    `- サークル: ${article.circle_name || ""}`,
+    `- 作者: ${article.author_name || ""}`,
+    `- ジャンル: ${genres.join("、")}`,
+    "",
+    "## 続きが気になる場合",
+    "",
+    "サンプルや販売ページで、絵柄・雰囲気・注意事項を確認してから判断してください。",
+    ""
+  );
+
+  return lines.join("\n");
+}
+
+function articleBodyText(article = {}, body = "") {
+  const markdown = String(body || "");
+  if (!markdown.trim()) return defaultArticleBody(article);
+
+  const comment = String(article.excerpt || "").trim();
+  if (!comment || hasWorkCommentSection(markdown)) return markdown;
+
+  return insertWorkCommentSection(markdown, comment);
+}
+
+function hasWorkCommentSection(markdown) {
+  return /^#{1,3}\s*作品コメント\s*$/mu.test(String(markdown || ""));
+}
+
+function insertWorkCommentSection(markdown, comment) {
+  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+  let index = 0;
+  while (index < lines.length && (!lines[index].trim() || lines[index].trimStart().startsWith(">"))) {
+    index += 1;
+  }
+
+  lines.splice(index, 0, "## 作品コメント", "", comment, "");
+  return lines.join("\n");
 }
 
 function insertText(text) {
@@ -509,7 +543,7 @@ function updatePreviewAndChecks() {
   const article = collectArticle();
   const productLink = productPageUrl(article);
   const sampleImages = articleSampleImages(article);
-  const sampleViewer = sampleImages.length > 1 ? renderSampleCarousel(article, productLink, "article") : "";
+  const sampleViewer = sampleImages.length ? renderSampleCarousel(article, productLink, "article") : "";
   const thumbnail = !sampleViewer && fields.thumbnail_url.value
     ? productLink
       ? `<a class="image-product-link hero-link" href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer" aria-label="商品ページを開く"><img class="hero-image" src="${escapeHtml(fields.thumbnail_url.value)}" alt=""></a>`
@@ -520,9 +554,9 @@ function updatePreviewAndChecks() {
     ${fields.circle_name.value || fields.author_name.value ? `<p class="work-meta">${escapeHtml([fields.circle_name.value, fields.author_name.value].filter(Boolean).join(" / "))}</p>` : ""}
     ${sampleViewer || thumbnail}
     ${fields.weekly_pick.checked && fields.editor_note.value.trim() ? `<section class="editor-note-box"><h2>おすすめコメント</h2><p>${escapeHtml(fields.editor_note.value.trim())}</p></section>` : ""}
-    ${renderWorkComment(fields.excerpt.value)}
     ${markdownToHtml(fields.body.value, { imageLinkUrl: productLink })}
   `;
+  refreshSampleCarousels($("previewPane"));
   $("writingStats").textContent = `${fields.body.value.length}文字`;
   renderChecks();
 }
@@ -539,12 +573,11 @@ function renderWorkComment(value) {
 }
 
 function renderSampleCarousel(article, productLink = "", variant = "") {
-  const images = articleSampleImages(article);
+  const images = articleSampleImages(article).slice(0, 12);
   if (!images.length) return "";
   const link = String(productLink || "").trim();
   const className = ["sample-carousel", variant ? `sample-carousel-${variant}` : ""].filter(Boolean).join(" ");
   const imageItems = images
-    .slice(0, 12)
     .map((url, index) => {
       const image = `<img src="${escapeHtml(url)}" alt="${escapeHtml(`${article.title || "作品"} 試し読み ${index + 1}`)}" loading="lazy">`;
       return link
@@ -552,15 +585,31 @@ function renderSampleCarousel(article, productLink = "", variant = "") {
         : `<span class="sample-slide">${image}</span>`;
     })
     .join("");
+  const controls = images.length > 1
+    ? `
+      <button class="sample-nav sample-nav-prev" type="button" aria-label="前の試し読み画像" data-sample-nav="-1">&#8249;</button>
+      <button class="sample-nav sample-nav-next" type="button" aria-label="次の試し読み画像" data-sample-nav="1">&#8250;</button>
+      <p class="sample-page-indicator"><span data-sample-page>1</span> / <span data-sample-total>${images.length}</span></p>
+    `
+    : "";
   return `
-    <div class="${className}" aria-label="試し読み画像">
-      ${imageItems}
+    <div class="sample-carousel-shell${variant ? ` sample-carousel-shell-${variant}` : ""}">
+      <div class="${className}" aria-label="試し読み画像" tabindex="0">
+        ${imageItems}
+      </div>
+      ${controls}
     </div>
   `;
 }
 
 function articleSampleImages(article) {
   return unique([article.thumbnail_url, ...(article.sample_images || [])].filter(Boolean));
+}
+
+function refreshSampleCarousels(root = document) {
+  if (window.DmmSampleCarousel && typeof window.DmmSampleCarousel.refresh === "function") {
+    window.DmmSampleCarousel.refresh(root);
+  }
 }
 
 function renderChecks() {
