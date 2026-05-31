@@ -44,6 +44,9 @@
     if (total) total.textContent = String(slides.length || 1);
     if (prev) prev.disabled = index <= 0;
     if (next) next.disabled = index >= slides.length - 1;
+    if (slides[index]?.offsetHeight) {
+      track.style.height = `${slides[index].offsetHeight}px`;
+    }
   }
 
   function move(shell, direction) {
@@ -71,6 +74,12 @@
           { passive: true }
         );
       }
+
+      track.querySelectorAll("img").forEach((image) => {
+        if (image.dataset.sampleCarouselImageReady) return;
+        image.dataset.sampleCarouselImageReady = "1";
+        image.addEventListener("load", () => update(shell), { once: true });
+      });
 
       update(shell);
     });

@@ -777,16 +777,20 @@ textarea:focus {
 }
 
 .weekly-pick-card {
+  align-items: start;
   background: #fff;
   border: 1px solid #d8d2cc;
   border-radius: 8px;
   display: grid;
-  gap: 18px;
-  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1fr);
-  padding: 16px;
+  gap: 16px;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  padding: 14px;
 }
 
 .weekly-pick-body {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
 
@@ -798,19 +802,23 @@ textarea:focus {
 }
 
 .weekly-pick-card h3 {
-  font-size: 24px;
+  font-size: 22px;
   line-height: 1.35;
-  margin: 0 0 8px;
+  margin: 0 0 6px;
   overflow-wrap: anywhere;
 }
 
 .editor-note {
   color: #2f3b42;
+  display: -webkit-box;
   font-size: 15px;
-  line-height: 1.8;
-  margin: 12px 0 0;
+  line-height: 1.7;
+  margin: 10px 0 0;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  overflow: hidden;
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
+  white-space: pre-line;
 }
 
 .editor-note-box {
@@ -835,7 +843,7 @@ textarea:focus {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 16px;
+  margin-top: 14px;
 }
 
 .pick-cta {
@@ -862,6 +870,7 @@ textarea:focus {
 }
 
 .sample-carousel {
+  align-items: start;
   display: grid;
   gap: 12px;
   grid-auto-columns: 100%;
@@ -872,6 +881,7 @@ textarea:focus {
   scroll-behavior: smooth;
   scroll-snap-type: inline mandatory;
   scrollbar-width: none;
+  transition: height 160ms ease;
 }
 
 .sample-carousel::-webkit-scrollbar {
@@ -879,12 +889,10 @@ textarea:focus {
 }
 
 .sample-slide {
-  align-items: center;
-  aspect-ratio: 3 / 4;
-  background: #f1f5f6;
-  border: 1px solid #e0e7eb;
+  background: transparent;
+  border: 0;
   border-radius: 8px;
-  display: flex;
+  display: block;
   justify-content: center;
   line-height: 0;
   overflow: hidden;
@@ -894,14 +902,16 @@ textarea:focus {
 }
 
 .sample-slide:hover {
-  border-color: #b4c4ca;
+  box-shadow: 0 0 0 3px rgba(23, 107, 93, 0.16);
 }
 
 .sample-slide img {
+  background: #fff;
+  border: 1px solid #e0e7eb;
+  border-radius: 8px;
   display: block;
-  height: 100%;
+  height: auto;
   margin: 0;
-  object-fit: contain;
   width: 100%;
 }
 
@@ -916,6 +926,7 @@ textarea:focus {
 
 .sample-carousel-shell-weekly {
   align-self: start;
+  width: 100%;
 }
 
 .sample-nav {
