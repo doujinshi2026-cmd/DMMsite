@@ -816,6 +816,17 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
+@media (min-width: 761px) {
+  .weekly-pick-grid {
+    align-items: start;
+  }
+
+  .weekly-pick-card {
+    align-content: start;
+    align-self: start;
+  }
+}
+
 .editor-note {
   color: #2f3b42;
   display: -webkit-box;
