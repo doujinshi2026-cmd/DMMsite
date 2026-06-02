@@ -950,7 +950,8 @@ textarea:focus {
   width: 100%;
 }
 
-.sample-carousel-shell-weekly .sample-nav {
+.sample-carousel-shell-weekly .sample-nav,
+.sample-carousel-shell-article .sample-nav {
   background: rgba(29, 42, 48, 0.34);
   border-color: rgba(255, 255, 255, 0.48);
   box-shadow: 0 4px 14px rgba(24, 31, 35, 0.16);
@@ -961,21 +962,25 @@ textarea:focus {
   width: 34px;
 }
 
-.sample-carousel-shell-weekly .sample-nav:hover:not(:disabled) {
+.sample-carousel-shell-weekly .sample-nav:hover:not(:disabled),
+.sample-carousel-shell-article .sample-nav:hover:not(:disabled) {
   background: rgba(29, 42, 48, 0.58);
   border-color: rgba(255, 255, 255, 0.7);
   opacity: 1;
 }
 
-.sample-carousel-shell-weekly .sample-nav-prev {
+.sample-carousel-shell-weekly .sample-nav-prev,
+.sample-carousel-shell-article .sample-nav-prev {
   left: 8px;
 }
 
-.sample-carousel-shell-weekly .sample-nav-next {
+.sample-carousel-shell-weekly .sample-nav-next,
+.sample-carousel-shell-article .sample-nav-next {
   right: 8px;
 }
 
-.sample-carousel-shell-weekly .sample-page-indicator {
+.sample-carousel-shell-weekly .sample-page-indicator,
+.sample-carousel-shell-article .sample-page-indicator {
   background: rgba(29, 42, 48, 0.68);
   bottom: 9px;
   font-size: 11px;
@@ -1499,8 +1504,8 @@ textarea:focus {
   .article-shell > article > .hero-image,
   .article-body,
   .work-comment {
-    max-width: calc(100vw - 42px);
-    width: 320px;
+    max-width: calc(100vw - 24px);
+    width: 100%;
   }
 
   .article-shell .site-header h1 {
