@@ -469,23 +469,11 @@ function renderWeeklyPickSection(articles) {
 function renderWeeklyPickCard(article) {
   const productLink = productPageUrl(article);
   const articleLink = `/site/posts/${encodeURIComponent(article.slug)}`;
-  const labels =
-    renderGenreTags((article.genres || []).slice(0, 6)) +
-    renderPlainTags((article.emotions || []).slice(0, 3));
-  const note = String(article.editor_note || article.excerpt || "").trim();
   return `
             <article class="weekly-pick-card">
               ${renderSampleCarousel(article, productLink, "weekly")}
               <div class="weekly-pick-body">
-                <p class="weekly-label">今週のおすすめ</p>
                 <h3><a href="${articleLink}">${escapeBreakableText(article.title)}</a></h3>
-                ${article.circle_name || article.author_name ? `<p class="work-meta">${escapeHtml([article.circle_name, article.author_name].filter(Boolean).join(" / "))}</p>` : ""}
-                ${note ? `<p class="editor-note">${escapeHtml(note)}</p>` : ""}
-                <div class="tags">${labels}</div>
-                <div class="pick-actions">
-                  <a class="ghost-link" href="${articleLink}">レビューを見る</a>
-                  ${productLink ? `<a class="pick-cta" href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer">作品ページ</a>` : ""}
-                </div>
               </div>
             </article>
   `;
@@ -555,7 +543,7 @@ function renderArticlePage(article, options = {}) {
 }
 
 function renderSampleCarousel(article, productLink = "", variant = "") {
-  const images = articleSampleImages(article).slice(0, 12);
+  const images = (variant === "weekly" ? weeklySampleImages(article) : articleSampleImages(article)).slice(0, 12);
   if (!images.length) return "";
   const link = String(productLink || "").trim();
   const className = ["sample-carousel", variant ? `sample-carousel-${variant}` : ""].filter(Boolean).join(" ");
@@ -586,6 +574,10 @@ function renderSampleCarousel(article, productLink = "", variant = "") {
 
 function articleSampleImages(article) {
   return unique([article.thumbnail_url, ...(article.sample_images || [])].filter(Boolean));
+}
+
+function weeklySampleImages(article) {
+  return unique([...(article.sample_images || []), article.thumbnail_url].filter(Boolean));
 }
 
 function articleBodyMarkdown(metadata, body) {

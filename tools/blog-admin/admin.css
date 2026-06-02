@@ -706,8 +706,8 @@ textarea:focus {
 
 .site-shell {
   margin: 0 auto;
-  max-width: 1040px;
-  padding: 32px 20px 60px;
+  max-width: 1240px;
+  padding: 36px 24px 64px;
   width: 100%;
 }
 
@@ -767,31 +767,34 @@ textarea:focus {
 
 .weekly-picks {
   border-bottom: 1px solid var(--line);
-  margin: 0 0 22px;
-  padding: 0 0 22px;
+  margin: 0 0 28px;
+  padding: 0 0 28px;
+}
+
+.weekly-picks .section-heading {
+  align-items: start;
+  flex-direction: column;
+  gap: 4px;
+  justify-content: flex-start;
 }
 
 .weekly-pick-grid {
   display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 300px));
+  justify-content: start;
 }
 
 .weekly-pick-card {
-  align-items: start;
   background: #fff;
   border: 1px solid #d8d2cc;
   border-radius: 8px;
   display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(132px, 168px) minmax(0, 1fr);
-  padding: 12px;
+  gap: 9px;
+  padding: 10px;
 }
 
 .weekly-pick-body {
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
   min-width: 0;
 }
 
@@ -803,9 +806,13 @@ textarea:focus {
 }
 
 .weekly-pick-card h3 {
-  font-size: 18px;
+  display: -webkit-box;
+  font-size: 17px;
   line-height: 1.35;
-  margin: 0 0 6px;
+  margin: 0;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   overflow-wrap: anywhere;
 }
 
@@ -932,17 +939,14 @@ textarea:focus {
 }
 
 .sample-carousel-shell-weekly .sample-slide {
-  aspect-ratio: 2 / 1;
   background: #fff;
+  border-radius: 6px;
 }
 
 .sample-carousel-shell-weekly .sample-slide img {
   border: 0;
-  border-radius: 0;
-  height: 100%;
-  object-fit: cover;
-  object-position: center;
-  transform: scale(1.08);
+  border-radius: 6px;
+  height: auto;
   width: 100%;
 }
 
@@ -1054,7 +1058,7 @@ textarea:focus {
   border-radius: 8px;
   display: grid;
   gap: 16px;
-  grid-template-columns: minmax(170px, 190px) minmax(0, 1fr);
+  grid-template-columns: minmax(190px, 220px) minmax(0, 1fr);
   padding: 14px;
 }
 
@@ -1332,7 +1336,7 @@ textarea:focus {
   }
 
   .weekly-pick-card {
-    grid-template-columns: minmax(132px, 168px) minmax(0, 1fr);
+    grid-template-columns: 1fr;
   }
 
   .form-grid {
@@ -1384,7 +1388,7 @@ textarea:focus {
 
   .post-card {
     gap: 12px;
-    grid-template-columns: 112px minmax(0, 1fr);
+    grid-template-columns: 132px minmax(0, 1fr);
     padding: 12px;
   }
 
