@@ -938,15 +938,25 @@ textarea:focus {
   width: 100%;
 }
 
+.sample-carousel-shell-weekly .sample-carousel {
+  align-items: stretch;
+  aspect-ratio: 2 / 3;
+  height: auto;
+  overflow-y: hidden;
+}
+
 .sample-carousel-shell-weekly .sample-slide {
   background: #fff;
   border-radius: 6px;
+  height: 100%;
 }
 
 .sample-carousel-shell-weekly .sample-slide img {
   border: 0;
   border-radius: 6px;
-  height: auto;
+  height: 100%;
+  object-fit: contain;
+  object-position: top center;
   width: 100%;
 }
 
