@@ -780,8 +780,8 @@ textarea:focus {
 
 .weekly-pick-grid {
   display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 300px));
+  gap: 18px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 420px));
   justify-content: start;
 }
 
@@ -948,6 +948,39 @@ textarea:focus {
   border-radius: 6px;
   height: auto;
   width: 100%;
+}
+
+.sample-carousel-shell-weekly .sample-nav {
+  background: rgba(29, 42, 48, 0.34);
+  border-color: rgba(255, 255, 255, 0.48);
+  box-shadow: 0 4px 14px rgba(24, 31, 35, 0.16);
+  color: #fff;
+  font-size: 23px;
+  height: 34px;
+  opacity: 0.86;
+  width: 34px;
+}
+
+.sample-carousel-shell-weekly .sample-nav:hover:not(:disabled) {
+  background: rgba(29, 42, 48, 0.58);
+  border-color: rgba(255, 255, 255, 0.7);
+  opacity: 1;
+}
+
+.sample-carousel-shell-weekly .sample-nav-prev {
+  left: 8px;
+}
+
+.sample-carousel-shell-weekly .sample-nav-next {
+  right: 8px;
+}
+
+.sample-carousel-shell-weekly .sample-page-indicator {
+  background: rgba(29, 42, 48, 0.68);
+  bottom: 9px;
+  font-size: 11px;
+  padding: 6px 8px;
+  right: 9px;
 }
 
 .sample-nav {
