@@ -36,6 +36,11 @@
     return Math.max(0, Math.min(slides.length - 1, index));
   }
 
+  function wrapIndex(index, slides) {
+    if (!slides.length) return 0;
+    return ((index % slides.length) + slides.length) % slides.length;
+  }
+
   function storedIndex(shell, track, slides) {
     const value = Number(shell.dataset.sampleCarouselIndex);
     return Number.isInteger(value) ? clampIndex(value, slides) : currentIndex(track);
@@ -49,8 +54,8 @@
 
     if (page) page.textContent = String(Math.min(index + 1, slides.length || 1));
     if (total) total.textContent = String(slides.length || 1);
-    if (prev) prev.disabled = index <= 0 || slides.length <= 1;
-    if (next) next.disabled = index >= slides.length - 1 || slides.length <= 1;
+    if (prev) prev.disabled = slides.length <= 1;
+    if (next) next.disabled = slides.length <= 1;
     if (slides[index]?.offsetHeight) {
       track.style.height = `${slides[index].offsetHeight}px`;
     }
@@ -100,7 +105,7 @@
     const slides = slidesFor(track);
     if (slides.length <= 1) return;
 
-    const nextIndex = clampIndex(storedIndex(shell, track, slides) + direction, slides);
+    const nextIndex = wrapIndex(storedIndex(shell, track, slides) + direction, slides);
     shell.dataset.sampleCarouselIndex = String(nextIndex);
     writeState(shell, nextIndex, slides, track);
 
