@@ -56,10 +56,6 @@
     if (total) total.textContent = String(slides.length || 1);
     if (prev) prev.disabled = slides.length <= 1;
     if (next) next.disabled = slides.length <= 1;
-    if (shell.classList.contains("sample-carousel-shell-weekly")) {
-      track.style.height = "";
-      return;
-    }
     if (slides[index]?.offsetHeight) {
       track.style.height = `${slides[index].offsetHeight}px`;
     }

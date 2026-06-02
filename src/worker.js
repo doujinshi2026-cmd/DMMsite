@@ -1479,7 +1479,7 @@ function articleSampleImages(article) {
 }
 
 function weeklySampleImages(article) {
-  return unique([article.thumbnail_url, ...(article.sample_images || [])].filter(Boolean));
+  return unique([...(article.sample_images || [])].filter(Boolean));
 }
 
 function articleBodyMarkdown(metadata, body) {
