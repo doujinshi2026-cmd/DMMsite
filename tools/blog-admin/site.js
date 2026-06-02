@@ -1,5 +1,7 @@
 (() => {
   const shellSelector = ".sample-carousel-shell";
+  const scrollTimers = new WeakMap();
+  const updateFrames = new WeakMap();
 
   function trackFor(shell) {
     return shell ? shell.querySelector(".sample-carousel") : null;
@@ -29,12 +31,17 @@
     return closestIndex;
   }
 
-  function update(shell) {
-    const track = trackFor(shell);
-    if (!track) return;
+  function clampIndex(index, slides) {
+    if (!slides.length) return 0;
+    return Math.max(0, Math.min(slides.length - 1, index));
+  }
 
-    const slides = slidesFor(track);
-    const index = currentIndex(track);
+  function storedIndex(shell, track, slides) {
+    const value = Number(shell.dataset.sampleCarouselIndex);
+    return Number.isInteger(value) ? clampIndex(value, slides) : currentIndex(track);
+  }
+
+  function writeState(shell, index, slides, track) {
     const page = shell.querySelector("[data-sample-page]");
     const total = shell.querySelector("[data-sample-total]");
     const prev = shell.querySelector('[data-sample-nav="-1"]');
@@ -42,11 +49,48 @@
 
     if (page) page.textContent = String(Math.min(index + 1, slides.length || 1));
     if (total) total.textContent = String(slides.length || 1);
-    if (prev) prev.disabled = index <= 0;
-    if (next) next.disabled = index >= slides.length - 1;
+    if (prev) prev.disabled = index <= 0 || slides.length <= 1;
+    if (next) next.disabled = index >= slides.length - 1 || slides.length <= 1;
     if (slides[index]?.offsetHeight) {
       track.style.height = `${slides[index].offsetHeight}px`;
     }
+  }
+
+  function update(shell) {
+    const track = trackFor(shell);
+    if (!track) return;
+
+    const slides = slidesFor(track);
+    const index = clampIndex(currentIndex(track), slides);
+    shell.dataset.sampleCarouselIndex = String(index);
+    writeState(shell, index, slides, track);
+  }
+
+  function requestUpdate(shell) {
+    const track = trackFor(shell);
+    if (!track || updateFrames.has(track)) return;
+
+    updateFrames.set(
+      track,
+      window.requestAnimationFrame(() => {
+        updateFrames.delete(track);
+        update(shell);
+      })
+    );
+  }
+
+  function finishProgrammaticScroll(shell) {
+    const track = trackFor(shell);
+    if (!track) return;
+
+    window.clearTimeout(scrollTimers.get(track));
+    scrollTimers.set(
+      track,
+      window.setTimeout(() => {
+        delete track.dataset.sampleCarouselMoving;
+        update(shell);
+      }, 220)
+    );
   }
 
   function move(shell, direction) {
@@ -56,9 +100,18 @@
     const slides = slidesFor(track);
     if (slides.length <= 1) return;
 
-    const nextIndex = Math.max(0, Math.min(slides.length - 1, currentIndex(track) + direction));
-    slides[nextIndex].scrollIntoView({ behavior: "smooth", block: "nearest", inline: "start" });
-    window.setTimeout(() => update(shell), 380);
+    const nextIndex = clampIndex(storedIndex(shell, track, slides) + direction, slides);
+    shell.dataset.sampleCarouselIndex = String(nextIndex);
+    writeState(shell, nextIndex, slides, track);
+
+    track.dataset.sampleCarouselMoving = "1";
+    const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+    if (typeof track.scrollTo === "function") {
+      track.scrollTo({ left: slides[nextIndex].offsetLeft, behavior });
+    } else {
+      track.scrollLeft = slides[nextIndex].offsetLeft;
+    }
+    finishProgrammaticScroll(shell);
   }
 
   function refresh(root = document) {
@@ -70,7 +123,13 @@
         track.dataset.sampleCarouselReady = "1";
         track.addEventListener(
           "scroll",
-          () => window.requestAnimationFrame(() => update(shell)),
+          () => {
+            if (track.dataset.sampleCarouselMoving) {
+              finishProgrammaticScroll(shell);
+              return;
+            }
+            requestUpdate(shell);
+          },
           { passive: true }
         );
       }

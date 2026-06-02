@@ -773,7 +773,8 @@ textarea:focus {
 
 .weekly-pick-grid {
   display: grid;
-  gap: 16px;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
 }
 
 .weekly-pick-card {
@@ -782,9 +783,9 @@ textarea:focus {
   border: 1px solid #d8d2cc;
   border-radius: 8px;
   display: grid;
-  gap: 16px;
-  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
-  padding: 14px;
+  gap: 12px;
+  grid-template-columns: minmax(132px, 168px) minmax(0, 1fr);
+  padding: 12px;
 }
 
 .weekly-pick-body {
@@ -802,7 +803,7 @@ textarea:focus {
 }
 
 .weekly-pick-card h3 {
-  font-size: 22px;
+  font-size: 18px;
   line-height: 1.35;
   margin: 0 0 6px;
   overflow-wrap: anywhere;
@@ -811,11 +812,11 @@ textarea:focus {
 .editor-note {
   color: #2f3b42;
   display: -webkit-box;
-  font-size: 15px;
-  line-height: 1.7;
-  margin: 10px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 8px 0 0;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 5;
+  -webkit-line-clamp: 3;
   overflow: hidden;
   overflow-wrap: anywhere;
   white-space: pre-line;
@@ -843,7 +844,8 @@ textarea:focus {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 14px;
+  margin-top: auto;
+  padding-top: 12px;
 }
 
 .pick-cta {
@@ -878,7 +880,7 @@ textarea:focus {
   overflow-x: auto;
   overscroll-behavior-inline: contain;
   padding: 0;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
   scroll-snap-type: inline mandatory;
   scrollbar-width: none;
   transition: height 160ms ease;
@@ -926,6 +928,21 @@ textarea:focus {
 
 .sample-carousel-shell-weekly {
   align-self: start;
+  width: 100%;
+}
+
+.sample-carousel-shell-weekly .sample-slide {
+  aspect-ratio: 2 / 1;
+  background: #fff;
+}
+
+.sample-carousel-shell-weekly .sample-slide img {
+  border: 0;
+  border-radius: 0;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  transform: scale(1.08);
   width: 100%;
 }
 
@@ -1046,16 +1063,14 @@ textarea:focus {
 }
 
 .post-image-link {
-  align-items: center;
-  aspect-ratio: 3 / 4;
-  background: #f1f5f6;
+  background: transparent;
   border: 1px solid #e0e7eb;
   border-radius: 8px;
-  display: flex;
-  justify-content: center;
+  display: block;
   line-height: 0;
   overflow: hidden;
   text-decoration: none;
+  width: 100%;
 }
 
 .post-image-link:hover {
@@ -1065,8 +1080,7 @@ textarea:focus {
 .post-image-link img {
   border-radius: 6px;
   display: block;
-  height: 100%;
-  object-fit: contain;
+  height: auto;
   width: 100%;
 }
 
@@ -1318,7 +1332,7 @@ textarea:focus {
   }
 
   .weekly-pick-card {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(132px, 168px) minmax(0, 1fr);
   }
 
   .form-grid {
@@ -1406,7 +1420,7 @@ textarea:focus {
   }
 
   .weekly-pick-card h3 {
-    font-size: 20px;
+    font-size: 18px;
   }
 
   .sample-carousel,
@@ -1457,6 +1471,14 @@ textarea:focus {
   }
 
   .post-card {
+    grid-template-columns: 1fr;
+  }
+
+  .weekly-pick-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .weekly-pick-card {
     grid-template-columns: 1fr;
   }
 
