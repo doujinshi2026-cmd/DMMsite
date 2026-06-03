@@ -57,7 +57,7 @@ function bindEvents() {
   $("sortFilter").addEventListener("change", renderArticleList);
   $("weeklyOnlyInput").addEventListener("change", renderArticleList);
   $("templateButton").addEventListener("click", insertReviewTemplate);
-  $("prBlockButton").addEventListener("click", () => insertText("> PR: このページには広告リンクを含みます。\n\n"));
+  $("prBlockButton").addEventListener("click", () => toast("公開ページ上部でPR表示を自動表示します。"));
   $("ctaButton").addEventListener("click", insertCtaBlock);
   $("uploadImageButton").addEventListener("click", uploadSelectedImage);
 
@@ -401,8 +401,6 @@ function defaultArticleBody(article = {}) {
   const genres = Array.isArray(article.genres) ? article.genres : splitList(article.genres || "");
   const comment = String(article.excerpt || "").trim();
   const lines = [
-    "> PR: このページには広告リンクを含む場合があります。",
-    "",
     "## 作品コメント",
     "",
   ];

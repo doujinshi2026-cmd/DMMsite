@@ -6,6 +6,7 @@ const MAX_RANKING_DETAIL_LIMIT = 40;
 const DEFAULT_REQUEST_DELAY_MS = 750;
 const MAX_REQUEST_DELAY_MS = 5000;
 const REQUEST_TIMEOUT_MS = 30000;
+const SITE_CONTACT_EMAIL = "doujinshi2026@gmail.com";
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -19,6 +20,7 @@ const ARTICLE_EDITORIAL_COLUMNS = [
   ["editor_note", "editor_note TEXT NOT NULL DEFAULT ''"],
 ];
 let articleEditorialColumnsReady = false;
+let contactMessagesTableReady = false;
 
 export default {
   async fetch(request, env, ctx) {
@@ -89,6 +91,18 @@ async function route(request, env) {
     };
     const articles = sortArticlesByUpdatedAt(allArticles.filter((article) => articleMatchesFilters(article, filters)));
     return sendHtml(renderSiteIndex(articles, { allArticles, filters }));
+  }
+
+  if (request.method === "GET" && (pathname === "/site/policy" || pathname === "/site/about")) {
+    return sendHtml(renderPolicyPage());
+  }
+
+  if (request.method === "GET" && pathname === "/site/contact") {
+    return sendHtml(renderContactPage());
+  }
+
+  if (request.method === "POST" && pathname === "/site/contact") {
+    return handleContactSubmit(request, env);
   }
 
   if (request.method === "GET" && pathname.startsWith("/site/posts/")) {
@@ -293,6 +307,21 @@ async function ensureArticleEditorialColumns(env) {
     "CREATE INDEX IF NOT EXISTS idx_articles_weekly_pick ON articles(weekly_pick, weekly_pick_order)"
   ).run();
   articleEditorialColumnsReady = true;
+}
+
+async function ensureContactMessagesTable(env) {
+  if (contactMessagesTableReady) return;
+
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS contact_messages (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      email TEXT NOT NULL DEFAULT '',
+      message TEXT NOT NULL
+    )`
+  ).run();
+  contactMessagesTableReady = true;
 }
 
 async function saveArticle(env, input) {
@@ -1315,7 +1344,7 @@ function renderSiteIndex(articles, context = {}) {
   return pageShell("R18ブックス・同人誌レビューガイド", `
     <main class="site-shell">
       <header class="site-header">
-        <p>18歳未満閲覧禁止 / 広告・PR</p>
+        <p>18歳未満閲覧禁止 / 商品リンクはPRを含みます</p>
         <h1>R18ブックス・同人誌レビューガイド</h1>
         ${countSummary}
         ${breadcrumb}
@@ -1363,6 +1392,108 @@ function renderSiteIndex(articles, context = {}) {
       </div>
     </main>
   `);
+}
+
+function renderPolicyPage() {
+  return pageShell("運営情報・サイトポリシー", `
+    <main class="site-shell static-page">
+      <p><a href="/site">← 作品一覧へ戻る</a></p>
+      <header class="site-header">
+        <p>18歳未満閲覧禁止</p>
+        <h1>運営情報・サイトポリシー</h1>
+      </header>
+      <section>
+        <h2>このサイトについて</h2>
+        <p>成人向け同人作品の雰囲気、作風、試し読みで確認したい点を整理するレビュー・紹介サイトです。18歳未満の方は閲覧できません。</p>
+        <p>当サイトはDMM/FANZA公式サイトではありません。作品名、画像、商品情報などの権利は各権利者に帰属します。</p>
+      </section>
+      <section>
+        <h2>運営者情報</h2>
+        <p>運営者: R18ブックス・同人誌レビューガイド編集部</p>
+        <p>連絡先: <a href="mailto:${SITE_CONTACT_EMAIL}">${SITE_CONTACT_EMAIL}</a> / <a href="/site/contact">お問い合わせフォーム</a></p>
+      </section>
+      <section>
+        <h2>掲載リンクについて</h2>
+        <p>作品ページへのリンクには、PRを含む成果報酬型リンクを掲載する場合があります。価格、販売状況、対応環境、注意事項は、購入前にリンク先の販売ページで必ず確認してください。</p>
+      </section>
+      <section>
+        <h2>画像・引用の扱い</h2>
+        <p>画像は、公式販売ページで確認できるサンプルや商品情報の範囲で、作品確認のために掲載しています。掲載内容に問題がある場合は、お問い合わせページからご連絡ください。</p>
+      </section>
+      <section>
+        <h2>プライバシー</h2>
+        <p>お問い合わせ時に入力された名前、メールアドレス、本文は、返信と確認対応のために利用します。法令に基づく場合を除き、本人の同意なく第三者へ提供しません。</p>
+        <p>サーバーの保守や不正利用対策のため、ホスティング事業者側でアクセスログが記録される場合があります。</p>
+      </section>
+      <section>
+        <h2>免責事項</h2>
+        <p>掲載内容は確認時点の情報です。正確性には注意していますが、最新情報や購入条件はリンク先の販売ページを優先してください。</p>
+      </section>
+    </main>
+  `);
+}
+
+function renderContactPage(state = {}) {
+  const values = state.values || {};
+  const errors = state.errors || [];
+  const success = Boolean(state.success);
+  return pageShell("お問い合わせ", `
+    <main class="site-shell static-page">
+      <p><a href="/site">← 作品一覧へ戻る</a></p>
+      <header class="site-header">
+        <p>18歳未満閲覧禁止</p>
+        <h1>お問い合わせ</h1>
+      </header>
+      <p>掲載内容、権利関係、サイト運営に関する連絡は、<a href="mailto:${SITE_CONTACT_EMAIL}">${SITE_CONTACT_EMAIL}</a> またはこちらのフォームから送信してください。</p>
+      ${success ? '<p class="form-message success">送信しました。内容を確認します。</p>' : ""}
+      ${errors.length ? `<div class="form-message error">${errors.map((error) => `<p>${escapeHtml(error)}</p>`).join("")}</div>` : ""}
+      <form class="contact-form" method="post" action="/site/contact">
+        <label>
+          <span>お名前</span>
+          <input name="name" value="${escapeHtml(values.name || "")}" autocomplete="name" maxlength="80">
+        </label>
+        <label>
+          <span>返信先メールアドレス</span>
+          <input name="email" type="email" value="${escapeHtml(values.email || "")}" autocomplete="email" maxlength="160">
+        </label>
+        <label>
+          <span>お問い合わせ内容</span>
+          <textarea name="message" rows="8" required maxlength="2000">${escapeHtml(values.message || "")}</textarea>
+        </label>
+        <button type="submit">送信</button>
+      </form>
+    </main>
+  `);
+}
+
+async function handleContactSubmit(request, env) {
+  const form = await request.formData();
+  const values = {
+    name: String(form.get("name") || "").trim().slice(0, 80),
+    email: String(form.get("email") || "").trim().slice(0, 160),
+    message: String(form.get("message") || "").trim().slice(0, 2000),
+  };
+  const errors = [];
+
+  if (values.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(values.email)) {
+    errors.push("メールアドレスの形式を確認してください。");
+  }
+  if (values.message.length < 10) {
+    errors.push("お問い合わせ内容は10文字以上で入力してください。");
+  }
+
+  if (errors.length) {
+    return sendHtml(renderContactPage({ values, errors }), 400);
+  }
+
+  await ensureContactMessagesTable(env);
+  await env.DB.prepare(
+    "INSERT INTO contact_messages (id, created_at, name, email, message) VALUES (?, ?, ?, ?, ?)"
+  )
+    .bind(crypto.randomUUID(), new Date().toISOString(), values.name, values.email, values.message)
+    .run();
+
+  return sendHtml(renderContactPage({ success: true }));
 }
 
 function sortWeeklyPicks(articles) {
@@ -1431,7 +1562,7 @@ function renderArticlePage(article, options = {}) {
       ${options.preview ? '<p class="preview-banner">Preview</p>' : ""}
       <article>
         <header class="site-header">
-          <p>18歳未満閲覧禁止 / 広告・${escapeHtml(metadata.pr_label || "PR")}</p>
+          <p>18歳未満閲覧禁止 / 商品リンクはPRを含みます</p>
           <h1>${escapeBreakableText(metadata.title)}</h1>
           ${circleLink || authorLink ? `<p class="work-meta">${circleLink}${circleLink && authorLink ? " / " : ""}${authorLink}</p>` : ""}
           <div class="tags">${labels}</div>
@@ -1483,7 +1614,7 @@ function weeklySampleImages(article) {
 }
 
 function articleBodyMarkdown(metadata, body) {
-  const markdown = String(body || "");
+  const markdown = stripLegacyDisclosureBlock(String(body || ""));
   if (!markdown.trim()) return defaultArticleBodyMarkdown(metadata);
 
   const comment = String(metadata.excerpt || "").trim();
@@ -1492,12 +1623,17 @@ function articleBodyMarkdown(metadata, body) {
   return insertWorkCommentSection(markdown, comment);
 }
 
+function stripLegacyDisclosureBlock(markdown) {
+  return String(markdown || "").replace(
+    /^>\s*(?:PR|広告)\s*[:：].*(?:広告リンク|アフィリエイトリンク).*(?:\n\s*){1,2}/u,
+    ""
+  );
+}
+
 function defaultArticleBodyMarkdown(metadata = {}) {
   const genres = Array.isArray(metadata.genres) ? metadata.genres : normalizeFilterValues(metadata.genres || "");
   const comment = String(metadata.excerpt || "").trim();
   const lines = [
-    "> PR: このページには広告リンクを含む場合があります。",
-    "",
     "## 作品コメント",
     "",
   ];
@@ -1788,9 +1924,25 @@ function pageShell(title, body) {
 </head>
 <body class="site-preview">
 ${body}
+${siteFooter()}
 <script src="/site.js" defer></script>
 </body>
 </html>`;
+}
+
+function siteFooter() {
+  return `
+<footer class="site-footer">
+  <div class="site-footer-inner">
+    <nav class="footer-links" aria-label="サイト情報">
+      <a href="/site">作品一覧</a>
+      <a href="/site/policy">運営情報・サイトポリシー</a>
+      <a href="/site/contact">お問い合わせ</a>
+    </nav>
+    <p>掲載リンクについて: 商品リンクにはアフィリエイトプログラムによる収益が発生する場合があります。</p>
+    <p>当サイトはDMM/FANZA公式サイトではありません。</p>
+  </div>
+</footer>`;
 }
 
 function sendJson(payload, status = 200) {
