@@ -1365,13 +1365,13 @@ function renderSiteIndex(articles, context = {}) {
               field: "circle",
               label: "サークル",
               value: filters.circle || "",
-              placeholder: "例: どじろーブックス",
+              placeholder: "例: サークル名",
             })}
             ${renderSuggestField({
               field: "author",
               label: "作者",
               value: filters.author || "",
-              placeholder: "例: どじろー",
+              placeholder: "例: 作者名",
             })}
             ${renderSuggestField({
               field: "genre",
