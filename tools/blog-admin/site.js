@@ -11,6 +11,18 @@
     return [...track.querySelectorAll(".sample-slide")];
   }
 
+  function isWeeklyShell(shell) {
+    return shell.classList.contains("sample-carousel-shell-weekly");
+  }
+
+  function slideHeight(slide, track) {
+    const image = slide?.querySelector("img");
+    if (image?.naturalWidth && image?.naturalHeight && track.clientWidth) {
+      return Math.max(1, Math.round((track.clientWidth * image.naturalHeight) / image.naturalWidth));
+    }
+    return slide?.offsetHeight || 0;
+  }
+
   function currentIndex(track) {
     const slides = slidesFor(track);
     if (!slides.length) return 0;
@@ -56,10 +68,9 @@
     if (total) total.textContent = String(slides.length || 1);
     if (prev) prev.disabled = slides.length <= 1;
     if (next) next.disabled = slides.length <= 1;
-    if (shell.classList.contains("sample-carousel-shell-weekly")) {
-      track.style.removeProperty("height");
-    } else if (slides[index]?.offsetHeight) {
-      track.style.height = `${slides[index].offsetHeight}px`;
+    const height = isWeeklyShell(shell) ? slideHeight(slides[index], track) : slides[index]?.offsetHeight || 0;
+    if (height) {
+      track.style.height = `${height}px`;
     }
   }
 
@@ -134,6 +145,11 @@
             if (track.dataset.sampleCarouselMoving) {
               finishProgrammaticScroll(shell);
               return;
+            }
+            if (isWeeklyShell(shell)) {
+              const slides = slidesFor(track);
+              const nextIndex = clampIndex(currentIndex(track), slides);
+              if (nextIndex === Number(shell.dataset.sampleCarouselIndex)) return;
             }
             requestUpdate(shell);
           },
