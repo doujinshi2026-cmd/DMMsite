@@ -7,6 +7,8 @@ const DEFAULT_REQUEST_DELAY_MS = 750;
 const MAX_REQUEST_DELAY_MS = 5000;
 const REQUEST_TIMEOUT_MS = 30000;
 const SITE_CONTACT_EMAIL = "doujinshi2026@gmail.com";
+const SITE_NAME = "オトナのよみもの案内";
+const SITE_OPERATOR_NAME = `${SITE_NAME} 編集部`;
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -1341,11 +1343,11 @@ function renderSiteIndex(articles, context = {}) {
     })
     .join("");
 
-  return pageShell("R18ブックス・同人誌レビューガイド", `
+  return pageShell(SITE_NAME, `
     <main class="site-shell">
       <header class="site-header">
         <p>18歳未満閲覧禁止 / 商品リンクはPRを含みます</p>
-        <h1>R18ブックス・同人誌レビューガイド</h1>
+        <h1>${SITE_NAME}</h1>
         ${countSummary}
         ${breadcrumb}
       </header>
@@ -1404,12 +1406,12 @@ function renderPolicyPage() {
       </header>
       <section>
         <h2>このサイトについて</h2>
-        <p>成人向け同人作品の雰囲気、作風、試し読みで確認したい点を整理するレビュー・紹介サイトです。18歳未満の方は閲覧できません。</p>
+        <p>大人向け作品の雰囲気、作風、試し読みで確認したい点を整理する紹介サイトです。18歳未満の方は閲覧できません。</p>
         <p>当サイトはDMM/FANZA公式サイトではありません。作品名、画像、商品情報などの権利は各権利者に帰属します。</p>
       </section>
       <section>
         <h2>運営者情報</h2>
-        <p>運営者: R18ブックス・同人誌レビューガイド編集部</p>
+        <p>運営者: ${SITE_OPERATOR_NAME}</p>
         <p>連絡先: <a href="mailto:${SITE_CONTACT_EMAIL}">${SITE_CONTACT_EMAIL}</a> / <a href="/site/contact">お問い合わせフォーム</a></p>
       </section>
       <section>
