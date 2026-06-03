@@ -1354,26 +1354,35 @@ function renderSiteIndex(articles, context = {}) {
       ${renderWeeklyPickSection(weeklyPicks)}
       <div class="catalog-layout">
         <aside class="filter-panel">
-          <form method="get" action="/site" class="filter-form">
-            <label>
-              <span>キーワード</span>
-              <input name="q" value="${escapeHtml(filters.q || "")}" placeholder="タイトル、サークル、作者、タグ">
-            </label>
-            <label>
-              <span>サークル</span>
-              <input name="circle" value="${escapeHtml(filters.circle || "")}" placeholder="例: どじろーブックス">
-            </label>
-            <label>
-              <span>作者</span>
-              <input name="author" value="${escapeHtml(filters.author || "")}" placeholder="例: どじろー">
-            </label>
-            <label>
-              <span>ジャンル</span>
-              <input name="genre" value="${escapeHtml((filters.genres || []).join(" "))}" placeholder="例: 制服 巨乳">
-            </label>
+          <form method="get" action="/site" class="filter-form" data-suggest-form>
+            ${renderSuggestField({
+              field: "q",
+              label: "キーワード",
+              value: filters.q || "",
+              placeholder: "タイトル、サークル、作者、タグ",
+            })}
+            ${renderSuggestField({
+              field: "circle",
+              label: "サークル",
+              value: filters.circle || "",
+              placeholder: "例: どじろーブックス",
+            })}
+            ${renderSuggestField({
+              field: "author",
+              label: "作者",
+              value: filters.author || "",
+              placeholder: "例: どじろー",
+            })}
+            ${renderSuggestField({
+              field: "genre",
+              label: "ジャンル",
+              value: (filters.genres || []).join(" "),
+              placeholder: "例: 制服 巨乳",
+            })}
             <button type="submit">検索</button>
             <a class="ghost-link" href="/site">解除</a>
           </form>
+          ${renderSearchSuggestionScript(allArticles)}
           ${activeLabel ? `<div class="active-filter">${activeLabel}</div>` : ""}
           <div class="filter-links">
             <section>
@@ -1394,6 +1403,98 @@ function renderSiteIndex(articles, context = {}) {
       </div>
     </main>
   `);
+}
+
+function renderSuggestField({ field, label, value, placeholder }) {
+  const id = `siteFilter${field[0].toUpperCase()}${field.slice(1)}`;
+  const menuId = `${id}Suggestions`;
+  return `
+            <div class="suggest-field" data-suggest-field="${escapeHtml(field)}">
+              <label for="${escapeHtml(id)}"><span>${escapeHtml(label)}</span></label>
+              <div class="suggest-input-wrap">
+                <input id="${escapeHtml(id)}" name="${escapeHtml(field)}" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" autocomplete="off" aria-autocomplete="list" aria-expanded="false" aria-controls="${escapeHtml(menuId)}" data-suggest-input>
+                <div id="${escapeHtml(menuId)}" class="suggest-menu" role="listbox" data-suggest-menu hidden></div>
+              </div>
+            </div>
+  `;
+}
+
+function renderSearchSuggestionScript(articles) {
+  return `<script type="application/json" id="site-search-suggestions">${jsonForScript(buildSearchSuggestions(articles))}</script>`;
+}
+
+function buildSearchSuggestions(articles) {
+  const maps = {
+    q: new Map(),
+    circle: new Map(),
+    author: new Map(),
+    genre: new Map(),
+  };
+
+  const add = (map, value, type, article) => {
+    const text = String(value || "").trim();
+    if (!text) return;
+    const key = normalizeKey(text);
+    const item = map.get(key) || {
+      value: text,
+      type,
+      count: 0,
+      circles: new Set(),
+      authors: new Set(),
+    };
+    item.count += 1;
+    if (article?.circle_name) item.circles.add(article.circle_name);
+    if (article?.author_name) item.authors.add(article.author_name);
+    map.set(key, item);
+  };
+
+  for (const article of articles) {
+    add(maps.q, article.title, "作品", article);
+    add(maps.q, article.product_title, "作品", article);
+    add(maps.q, article.circle_name, "サークル", article);
+    add(maps.q, article.author_name, "作者", article);
+    for (const genre of article.genres || []) {
+      add(maps.q, genre, "ジャンル", article);
+      add(maps.genre, genre, "ジャンル", article);
+    }
+    for (const emotion of article.emotions || []) {
+      add(maps.q, emotion, "タグ", article);
+    }
+    add(maps.circle, article.circle_name, "サークル", article);
+    add(maps.author, article.author_name, "作者", article);
+  }
+
+  return {
+    q: serializeSuggestions(maps.q, 420),
+    circle: serializeSuggestions(maps.circle, 220),
+    author: serializeSuggestions(maps.author, 220),
+    genre: serializeSuggestions(maps.genre, 260),
+  };
+}
+
+function serializeSuggestions(map, limit) {
+  return [...map.values()]
+    .sort((a, b) => {
+      if (a.count !== b.count) return b.count - a.count;
+      return a.value.localeCompare(b.value, "ja");
+    })
+    .slice(0, limit)
+    .map((item) => ({
+      value: item.value,
+      type: item.type,
+      count: item.count,
+      circles: [...item.circles],
+      authors: [...item.authors],
+    }));
+}
+
+function jsonForScript(value) {
+  return JSON.stringify(value)
+    .replace(/</gu, "\\u003c")
+    .replace(/>/gu, "\\u003e")
+    .replace(/&/gu, "\\u0026")
+    .replace(/\u2028/gu, "\\u2028")
+    .replace(/\u2029/gu, "\\u2029");
 }
 
 function renderPolicyPage() {

@@ -167,6 +167,192 @@
     });
   }
 
+  function normalizeSuggestionText(value) {
+    return String(value || "").normalize("NFKC").trim().toLowerCase();
+  }
+
+  function genreToken(value) {
+    const match = String(value || "").match(/^(.*?)([^\s\u3000,、，]*)$/u);
+    return {
+      prefix: match?.[1] || "",
+      term: match?.[2] || "",
+    };
+  }
+
+  function suggestionTerm(input, fieldName) {
+    return fieldName === "genre" ? genreToken(input.value).term : input.value;
+  }
+
+  function applySuggestion(input, fieldName, value) {
+    if (fieldName === "genre") {
+      const token = genreToken(input.value);
+      input.value = `${token.prefix}${value}`;
+    } else {
+      input.value = value;
+    }
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function fieldValue(form, name) {
+    return normalizeSuggestionText(form.elements[name]?.value || "");
+  }
+
+  function matchesSuggestionContext(fieldName, item, form) {
+    const circle = fieldValue(form, "circle");
+    const author = fieldValue(form, "author");
+    const circles = (item.circles || []).map(normalizeSuggestionText);
+    const authors = (item.authors || []).map(normalizeSuggestionText);
+
+    if (fieldName === "author" && circle) {
+      return circles.includes(circle);
+    }
+    if (fieldName === "genre") {
+      if (circle && !circles.includes(circle)) return false;
+      if (author && !authors.includes(author)) return false;
+    }
+    return true;
+  }
+
+  function rankedSuggestions(data, fieldName, input, form) {
+    const rawTerm = suggestionTerm(input, fieldName);
+    const term = normalizeSuggestionText(rawTerm);
+    return (data[fieldName] || [])
+      .filter((item) => matchesSuggestionContext(fieldName, item, form))
+      .map((item) => {
+        const value = normalizeSuggestionText(item.value);
+        const matchScore = !term ? 1 : value.startsWith(term) ? 3 : value.includes(term) ? 2 : 0;
+        return { ...item, matchScore };
+      })
+      .filter((item) => item.matchScore > 0)
+      .sort((a, b) => {
+        if (a.matchScore !== b.matchScore) return b.matchScore - a.matchScore;
+        if ((a.count || 0) !== (b.count || 0)) return (b.count || 0) - (a.count || 0);
+        return String(a.value || "").localeCompare(String(b.value || ""), "ja");
+      })
+      .slice(0, 7);
+  }
+
+  function hideSuggestMenu(field) {
+    const input = field.querySelector("[data-suggest-input]");
+    const menu = field.querySelector("[data-suggest-menu]");
+    if (!menu || !input) return;
+    menu.hidden = true;
+    menu.replaceChildren();
+    field.dataset.suggestActiveIndex = "-1";
+    input.setAttribute("aria-expanded", "false");
+    input.removeAttribute("aria-activedescendant");
+  }
+
+  function setSuggestActive(field, index) {
+    const input = field.querySelector("[data-suggest-input]");
+    const menu = field.querySelector("[data-suggest-menu]");
+    const options = menu ? [...menu.querySelectorAll(".suggest-option")] : [];
+    const nextIndex = options.length ? Math.max(0, Math.min(index, options.length - 1)) : -1;
+    field.dataset.suggestActiveIndex = String(nextIndex);
+    options.forEach((option, optionIndex) => {
+      const active = optionIndex === nextIndex;
+      option.classList.toggle("active", active);
+      option.setAttribute("aria-selected", active ? "true" : "false");
+      if (active && input) input.setAttribute("aria-activedescendant", option.id);
+    });
+    if (nextIndex < 0 && input) input.removeAttribute("aria-activedescendant");
+  }
+
+  function showSuggestMenu(field, data, form) {
+    const fieldName = field.dataset.suggestField || "";
+    const input = field.querySelector("[data-suggest-input]");
+    const menu = field.querySelector("[data-suggest-menu]");
+    if (!input || !menu || !fieldName) return;
+
+    const suggestions = rankedSuggestions(data, fieldName, input, form);
+    if (!suggestions.length) {
+      hideSuggestMenu(field);
+      return;
+    }
+
+    menu.replaceChildren();
+    suggestions.forEach((item, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "suggest-option";
+      button.id = `${menu.id}-option-${index}`;
+      button.setAttribute("role", "option");
+      button.setAttribute("aria-selected", "false");
+      button.dataset.suggestValue = item.value;
+
+      const value = document.createElement("strong");
+      value.textContent = item.value;
+      const meta = document.createElement("small");
+      meta.textContent = `${item.type || "候補"}${item.count ? ` ${item.count}件` : ""}`;
+      button.append(value, meta);
+      menu.append(button);
+    });
+
+    menu.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+    setSuggestActive(field, -1);
+  }
+
+  function initSearchSuggestions(root = document) {
+    const script = root.getElementById ? root.getElementById("site-search-suggestions") : document.getElementById("site-search-suggestions");
+    const form = root.querySelector ? root.querySelector("[data-suggest-form]") : document.querySelector("[data-suggest-form]");
+    if (!script || !form) return;
+
+    let data = {};
+    try {
+      data = JSON.parse(script.textContent || "{}");
+    } catch {
+      return;
+    }
+
+    const fields = [...form.querySelectorAll("[data-suggest-field]")];
+    fields.forEach((field) => {
+      const input = field.querySelector("[data-suggest-input]");
+      const menu = field.querySelector("[data-suggest-menu]");
+      if (!input || !menu) return;
+
+      input.addEventListener("focus", () => showSuggestMenu(field, data, form));
+      input.addEventListener("input", () => showSuggestMenu(field, data, form));
+      input.addEventListener("keydown", (event) => {
+        const currentIndex = Number(field.dataset.suggestActiveIndex || -1);
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          if (menu.hidden) showSuggestMenu(field, data, form);
+          setSuggestActive(field, currentIndex + 1);
+        } else if (event.key === "ArrowUp") {
+          event.preventDefault();
+          if (menu.hidden) showSuggestMenu(field, data, form);
+          const options = [...menu.querySelectorAll(".suggest-option")];
+          setSuggestActive(field, currentIndex <= 0 ? options.length - 1 : currentIndex - 1);
+        } else if (event.key === "Enter" && !menu.hidden && currentIndex >= 0) {
+          const options = [...menu.querySelectorAll(".suggest-option")];
+          if (!options[currentIndex]) return;
+          event.preventDefault();
+          applySuggestion(input, field.dataset.suggestField, options[currentIndex].dataset.suggestValue || "");
+          hideSuggestMenu(field);
+        } else if (event.key === "Escape") {
+          hideSuggestMenu(field);
+        }
+      });
+
+      menu.addEventListener("pointerdown", (event) => event.preventDefault());
+      menu.addEventListener("click", (event) => {
+        const option = event.target.closest(".suggest-option");
+        if (!option) return;
+        applySuggestion(input, field.dataset.suggestField, option.dataset.suggestValue || "");
+        hideSuggestMenu(field);
+        input.focus();
+      });
+    });
+
+    document.addEventListener("pointerdown", (event) => {
+      fields.forEach((field) => {
+        if (!field.contains(event.target)) hideSuggestMenu(field);
+      });
+    });
+  }
+
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-sample-nav]");
     if (!button) return;
@@ -181,9 +367,14 @@
 
   window.DmmSampleCarousel = { refresh };
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => refresh());
-  } else {
+  function ready() {
     refresh();
+    initSearchSuggestions();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", ready);
+  } else {
+    ready();
   }
 })();
