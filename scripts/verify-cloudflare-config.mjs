@@ -8,7 +8,7 @@ const PROJECT_ROOT = path.resolve(__dirname, "..");
 const WRANGLER_PATH = path.join(PROJECT_ROOT, "wrangler.jsonc");
 const PLACEHOLDER_DATABASE_ID = "00000000-0000-0000-0000-000000000000";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-const EXPECTED_CRONS = ["0 15 * * *", "0 3 * * *"];
+const EXPECTED_CRONS = ["10 22 * * *", "10 3 * * *", "10 12 * * *", "10 15 * * *"];
 
 const config = JSON.parse(stripJsonc(await fs.readFile(WRANGLER_PATH, "utf8")));
 const database = (config.d1_databases || []).find((item) => item.binding === "DB");
@@ -41,7 +41,7 @@ for (const cron of EXPECTED_CRONS) {
   if (!crons.includes(cron)) {
     fail(
       `wrangler.jsonc の Cron に ${cron} がありません。` +
-        `日本時間00:00/12:00更新には ${EXPECTED_CRONS.join(", ")} が必要です。`
+        `日本時間07:10/12:10/21:10/00:10更新には ${EXPECTED_CRONS.join(", ")} が必要です。`
     );
   }
 }

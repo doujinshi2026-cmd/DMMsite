@@ -205,11 +205,11 @@
     const authors = (item.authors || []).map(normalizeSuggestionText);
 
     if (fieldName === "author" && circle) {
-      return circles.includes(circle);
+      return !circles.length || circles.includes(circle);
     }
     if (fieldName === "genre") {
-      if (circle && !circles.includes(circle)) return false;
-      if (author && !authors.includes(author)) return false;
+      if (circle && circles.length && !circles.includes(circle)) return false;
+      if (author && authors.length && !authors.includes(author)) return false;
     }
     return true;
   }
@@ -217,7 +217,17 @@
   function rankedSuggestions(data, fieldName, input, form) {
     const rawTerm = suggestionTerm(input, fieldName);
     const term = normalizeSuggestionText(rawTerm);
-    return (data[fieldName] || [])
+    const source =
+      fieldName === "q"
+        ? [
+            ...(data.q || []),
+            ...(data.circle || []),
+            ...(data.author || []),
+            ...(data.genre || []),
+            ...(data.tag || []),
+          ]
+        : data[fieldName] || [];
+    return source
       .filter((item) => matchesSuggestionContext(fieldName, item, form))
       .map((item) => {
         const value = normalizeSuggestionText(item.value);
@@ -295,15 +305,39 @@
   }
 
   function initSearchSuggestions(root = document) {
-    const script = root.getElementById ? root.getElementById("site-search-suggestions") : document.getElementById("site-search-suggestions");
     const form = root.querySelector ? root.querySelector("[data-suggest-form]") : document.querySelector("[data-suggest-form]");
-    if (!script || !form) return;
+    if (!form) return;
 
-    let data = {};
-    try {
-      data = JSON.parse(script.textContent || "{}");
-    } catch {
-      return;
+    const script = root.getElementById
+      ? root.getElementById("site-search-suggestions")
+      : document.getElementById("site-search-suggestions");
+    let dataPromise;
+
+    function loadData() {
+      if (dataPromise) return dataPromise;
+
+      if (script?.textContent?.trim()) {
+        dataPromise = Promise.resolve()
+          .then(() => JSON.parse(script.textContent || "{}"))
+          .catch(() => ({}));
+        return dataPromise;
+      }
+
+      const source = form.dataset.suggestUrl || "";
+      if (!source) {
+        dataPromise = Promise.resolve({});
+        return dataPromise;
+      }
+
+      dataPromise = fetch(source, {
+        headers: { Accept: "application/json" },
+      })
+        .then((response) => {
+          if (!response.ok) throw new Error(`suggestions request failed: ${response.status}`);
+          return response.json();
+        })
+        .catch(() => ({}));
+      return dataPromise;
     }
 
     const fields = [...form.querySelectorAll("[data-suggest-field]")];
@@ -312,17 +346,28 @@
       const menu = field.querySelector("[data-suggest-menu]");
       if (!input || !menu) return;
 
-      input.addEventListener("focus", () => showSuggestMenu(field, data, form));
-      input.addEventListener("input", () => showSuggestMenu(field, data, form));
+      const updateMenu = async () => {
+        const data = await loadData();
+        if (document.activeElement === input) showSuggestMenu(field, data, form);
+      };
+
+      input.addEventListener("focus", updateMenu);
+      input.addEventListener("input", updateMenu);
       input.addEventListener("keydown", (event) => {
         const currentIndex = Number(field.dataset.suggestActiveIndex || -1);
         if (event.key === "ArrowDown") {
           event.preventDefault();
-          if (menu.hidden) showSuggestMenu(field, data, form);
+          if (menu.hidden) {
+            void updateMenu();
+            return;
+          }
           setSuggestActive(field, currentIndex + 1);
         } else if (event.key === "ArrowUp") {
           event.preventDefault();
-          if (menu.hidden) showSuggestMenu(field, data, form);
+          if (menu.hidden) {
+            void updateMenu();
+            return;
+          }
           const options = [...menu.querySelectorAll(".suggest-option")];
           setSuggestActive(field, currentIndex <= 0 ? options.length - 1 : currentIndex - 1);
         } else if (event.key === "Enter" && !menu.hidden && currentIndex >= 0) {
@@ -353,6 +398,16 @@
     });
   }
 
+  function initFilterDisclosure(root = document) {
+    const disclosure = root.querySelector
+      ? root.querySelector("[data-filter-disclosure]")
+      : document.querySelector("[data-filter-disclosure]");
+    if (!disclosure) return;
+
+    const mobile = window.matchMedia("(max-width: 760px)").matches;
+    disclosure.open = !mobile;
+  }
+
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-sample-nav]");
     if (!button) return;
@@ -369,6 +424,7 @@
 
   function ready() {
     refresh();
+    initFilterDisclosure();
     initSearchSuggestions();
   }
 

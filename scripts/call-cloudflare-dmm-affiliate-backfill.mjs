@@ -10,15 +10,8 @@ const DEFAULT_URL = "https://dmmsite.doujinshi2026.workers.dev";
 await loadDotEnv(path.join(PROJECT_ROOT, ".env"));
 
 const dryRun = process.argv.includes("--dry-run");
-const summaryOnly = process.argv.includes("--summary-only");
+const force = process.argv.includes("--force");
 const limit = readArg("--limit");
-const hits = readArg("--hits");
-const offset = readArg("--offset");
-const pageLimit = readArg("--page-limit") || readArg("--page_limit");
-const sort = readArg("--sort");
-const media = readArg("--media");
-const floor = readArg("--floor");
-const keyword = readArg("--keyword");
 const delayMs = readArg("--delay-ms") || readArg("--delay_ms");
 const baseUrl = String(process.env.CLOUDFLARE_WORKER_URL || DEFAULT_URL).replace(/\/$/u, "");
 const user = String(process.env.BLOG_CMS_USER || "admin");
@@ -30,17 +23,12 @@ if (!password) {
 
 const search = new URLSearchParams();
 if (dryRun) search.set("dryRun", "1");
+if (force) search.set("force", "1");
 if (limit) search.set("limit", limit);
-if (hits) search.set("hits", hits);
-if (offset) search.set("offset", offset);
-if (pageLimit) search.set("pageLimit", pageLimit);
-if (sort) search.set("sort", sort);
-if (media) search.set("media", media);
-if (floor) search.set("floor", floor);
-if (keyword) search.set("keyword", keyword);
 if (delayMs) search.set("delayMs", delayMs);
+
 const query = search.toString();
-const url = `${baseUrl}/api/dmm/import${query ? `?${query}` : ""}`;
+const url = `${baseUrl}/api/dmm/affiliate-backfill${query ? `?${query}` : ""}`;
 const response = await fetch(url, {
   headers: {
     Authorization: `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}`,
@@ -62,41 +50,21 @@ if (!response.ok) {
 
 function summarize(payload) {
   return {
-    floor: payload.floor,
-    sort: payload.sort,
-    media: payload.media,
-    keyword: payload.keyword,
-    offset: payload.offset,
+    dry_run: payload.dry_run,
+    force: payload.force,
     limit: payload.limit,
-    hits: payload.hits,
-    page_limit: payload.page_limit,
-    api_requests: payload.api_requests,
-    total_count: payload.total_count,
-    fetched: payload.fetched,
-    filtered: payload.filtered,
     seen: payload.seen,
-    created: payload.created,
     updated: payload.updated,
     skipped: payload.skipped,
     failed: payload.failed,
-    counts_before: payload.counts_before,
-    counts_after: payload.counts_after,
+    api_requests: payload.api_requests,
     request_delay_ms: payload.request_delay_ms,
-    dry_run: payload.dry_run,
-    ...(summaryOnly
-      ? {}
-      : {
-          items: (payload.items || []).map((item) => ({
-            rank: item.rank,
-            product_id: item.product_id,
-            title: item.title,
-            media_type: item.media_type,
-            slug: item.slug,
-            status: item.status,
-            duplicate: item.duplicate,
-            error: item.error,
-          })),
-        }),
+    items: (payload.items || []).map((item) => ({
+      slug: item.slug,
+      status: item.status,
+      product_id: item.product_id,
+      error: item.error,
+    })),
   };
 }
 

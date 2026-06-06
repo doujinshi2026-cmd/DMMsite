@@ -6,6 +6,27 @@ const MAX_RANKING_DETAIL_LIMIT = 40;
 const DEFAULT_REQUEST_DELAY_MS = 750;
 const MAX_REQUEST_DELAY_MS = 5000;
 const REQUEST_TIMEOUT_MS = 30000;
+const DMM_ITEMLIST_URL = "https://api.dmm.com/affiliate/v3/ItemList";
+const DEFAULT_DMM_API_SITE = "FANZA";
+const DEFAULT_DMM_API_SERVICE = "doujin";
+const DEFAULT_DMM_API_FLOOR = "digital_doujin";
+const DEFAULT_DMM_API_SORT = "rank";
+const DEFAULT_DMM_API_IMPORT_LIMIT = 50;
+const DEFAULT_DMM_API_IMPORT_HITS = 100;
+const DEFAULT_DMM_API_IMPORT_PAGE_LIMIT = 3;
+const MAX_DMM_API_IMPORT_LIMIT = 100;
+const MAX_DMM_API_IMPORT_HITS = 100;
+const MAX_DMM_API_IMPORT_PAGE_LIMIT = 10;
+const MAX_DMM_API_OFFSET = 50000;
+const DEFAULT_AFFILIATE_BACKFILL_LIMIT = 100;
+const SITE_PAGE_SIZE = 20;
+const SITE_MAX_PAGE = 250;
+const SITE_MAX_GENRE_FILTERS = 5;
+const SITE_FACET_LIMIT = 24;
+const SITE_MAX_QUERY_LENGTH = 2048;
+const SITE_HTML_CACHE_SECONDS = 300;
+const SITE_SUGGESTIONS_CACHE_SECONDS = 3600;
+const SITEMAP_FILTER_LIMIT = 80;
 const SITE_CONTACT_EMAIL = "doujinshi2026@gmail.com";
 const SITE_NAME = "オトナのよみもの案内";
 const SITE_OPERATOR_NAME = `${SITE_NAME} 編集部`;
@@ -15,6 +36,47 @@ const USER_AGENT =
 const STATUS_VALUES = new Set(["draft", "ready", "published", "archived"]);
 const TYPE_VALUES = new Set(["review", "column", "news", "list"]);
 const RIGHTS_VALUES = new Set(["pending_review", "approved_ad_material", "link_only"]);
+const DMM_API_SORT_VALUES = new Set(["rank", "date", "review", "price", "-price", "match"]);
+const DMM_API_MEDIA_VALUES = new Set(["comic", "game", "cg", "voice", "all"]);
+const DMM_API_FLOOR_VALUES = new Set(["digital_doujin", "digital_doujin_bl", "digital_doujin_tl"]);
+const DMM_API_SCHEDULES = [
+  {
+    cron: "10 22 * * *",
+    label: "morning-new-comics",
+    jst: "07:10",
+    sort: "date",
+    offset: 1,
+    limit: 100,
+    media: "comic",
+  },
+  {
+    cron: "10 3 * * *",
+    label: "lunch-popular-comics",
+    jst: "12:10",
+    sort: "rank",
+    offset: 1,
+    limit: 100,
+    media: "comic",
+  },
+  {
+    cron: "10 12 * * *",
+    label: "night-popular-comics",
+    jst: "21:10",
+    sort: "rank",
+    offset: 101,
+    limit: 100,
+    media: "comic",
+  },
+  {
+    cron: "10 15 * * *",
+    label: "late-review-comics",
+    jst: "00:10",
+    sort: "review",
+    offset: 1,
+    limit: 100,
+    media: "comic",
+  },
+];
 const ARTICLE_EDITORIAL_COLUMNS = [
   ["sample_images_json", "sample_images_json TEXT NOT NULL DEFAULT '[]'"],
   ["weekly_pick", "weekly_pick INTEGER NOT NULL DEFAULT 0"],
@@ -36,15 +98,16 @@ export default {
 
   async scheduled(controller, env, ctx) {
     ctx.waitUntil(
-      importDmmRanking(env, {
+      importDmmApiItems(env, {
         scheduledTime: controller.scheduledTime,
         cron: controller.cron,
+        ...scheduledDmmApiOptions(controller.cron),
       })
     );
   },
 };
 
-async function route(request, env) {
+async function route(request, env, ctx) {
   assertEnv(env);
 
   const url = new URL(request.url);
@@ -80,27 +143,92 @@ async function route(request, env) {
   }
 
   if (request.method === "GET" && pathname === "/robots.txt") {
-    return sendText("User-agent: *\nDisallow: /admin\nDisallow: /api/\nDisallow: /preview/\n");
+    return sendText(
+      [
+        "User-agent: *",
+        "Disallow: /admin",
+        "Disallow: /api/",
+        "Disallow: /preview/",
+        `Sitemap: ${url.origin}/sitemap.xml`,
+        "",
+      ].join("\n")
+    );
+  }
+
+  if (request.method === "GET" && pathname === "/sitemap.xml") {
+    const cacheUrl = new URL("/sitemap.xml", url.origin).href;
+    return cachedPublicResponse(cacheUrl, ctx, async () =>
+      sendXml(await renderSitemap(env, url.origin))
+    );
+  }
+
+  if (request.method === "GET" && pathname === "/site/suggestions.json") {
+    const cacheUrl = new URL("/site/suggestions.json", url.origin).href;
+    return cachedPublicResponse(cacheUrl, ctx, async () =>
+      sendPublicJson(await loadSiteSearchSuggestions(env), SITE_SUGGESTIONS_CACHE_SECONDS)
+    );
   }
 
   if (request.method === "GET" && pathname === "/site") {
-    const allArticles = sortArticlesByUpdatedAt((await listArticles(env)).filter(isPublicArticle));
-    const filters = {
-      q: String(url.searchParams.get("q") || "").trim(),
-      circle: String(url.searchParams.get("circle") || "").trim(),
-      author: String(url.searchParams.get("author") || "").trim(),
-      genres: normalizeFilterValues(url.searchParams.getAll("genre")),
-    };
-    const articles = sortArticlesByUpdatedAt(allArticles.filter((article) => articleMatchesFilters(article, filters)));
-    return sendHtml(renderSiteIndex(articles, { allArticles, filters }));
+    if (url.search.length > SITE_MAX_QUERY_LENGTH) {
+      return sendText("検索条件が長すぎます。条件を減らして再度お試しください。", 414);
+    }
+
+    const siteRequest = parseSiteRequest(url);
+    if (siteRequest.wasTrimmed) {
+      const redirectUrl = new URL(
+        siteFilterUrl({ ...siteRequest.filters, page: siteRequest.page }),
+        url.origin
+      );
+      redirectUrl.searchParams.set("notice", "filters-trimmed");
+      return Response.redirect(redirectUrl.href, 302);
+    }
+
+    const cacheUrlObject = new URL(
+      siteFilterUrl({ ...siteRequest.filters, page: siteRequest.page }),
+      url.origin
+    );
+    const notice = url.searchParams.get("notice") || "";
+    if (notice === "filters-trimmed") {
+      cacheUrlObject.searchParams.set("notice", notice);
+    }
+    return cachedPublicResponse(cacheUrlObject.href, ctx, async () => {
+      const indexData = await loadSiteIndexData(env, siteRequest.filters, siteRequest.page);
+      if (indexData.page !== siteRequest.page) {
+        return Response.redirect(
+          new URL(
+            siteFilterUrl({ ...siteRequest.filters, page: indexData.page }),
+            url.origin
+          ).href,
+          302
+        );
+      }
+      return sendHtml(
+        renderSiteIndex(indexData.articles, {
+          ...indexData,
+          filters: siteRequest.filters,
+          notice,
+          origin: url.origin,
+        }),
+        200,
+        publicCacheControl(SITE_HTML_CACHE_SECONDS)
+      );
+    });
   }
 
   if (request.method === "GET" && (pathname === "/site/policy" || pathname === "/site/about")) {
-    return sendHtml(renderPolicyPage());
+    const cacheUrl = new URL("/site/policy", url.origin).href;
+    return cachedPublicResponse(cacheUrl, ctx, async () =>
+      sendHtml(
+        renderPolicyPage({ origin: url.origin }),
+        200,
+        publicCacheControl(SITE_SUGGESTIONS_CACHE_SECONDS)
+      )
+    );
   }
 
   if (request.method === "GET" && pathname === "/site/contact") {
-    return sendHtml(renderContactPage());
+    return sendHtml(renderContactPage({ origin: url.origin }));
   }
 
   if (request.method === "POST" && pathname === "/site/contact") {
@@ -109,10 +237,17 @@ async function route(request, env) {
 
   if (request.method === "GET" && pathname.startsWith("/site/posts/")) {
     const slug = pathname.slice("/site/posts/".length);
-    const article = await readArticle(env, slug);
-    if (!article) return sendText("Not found", 404);
-    if (!isPublicArticle(article.metadata)) return sendText("Not found", 404);
-    return sendHtml(renderArticlePage(article));
+    const cacheUrl = new URL(`/site/posts/${encodeURIComponent(slug)}`, url.origin).href;
+    return cachedPublicResponse(cacheUrl, ctx, async () => {
+      const article = await readArticle(env, slug);
+      if (!article) return sendText("Not found", 404);
+      if (!isPublicArticle(article.metadata)) return sendText("Not found", 404);
+      return sendHtml(
+        renderArticlePage(article, { origin: url.origin }),
+        200,
+        publicCacheControl(SITE_HTML_CACHE_SECONDS)
+      );
+    });
   }
 
   if (request.method === "GET" && pathname.startsWith("/preview/")) {
@@ -121,7 +256,7 @@ async function route(request, env) {
     const slug = pathname.slice("/preview/".length);
     const article = await readArticle(env, slug);
     if (!article) return sendText("Not found", 404);
-    return sendHtml(renderArticlePage(article, { preview: true }));
+    return sendHtml(renderArticlePage(article, { preview: true, origin: url.origin }));
   }
 
   if (pathname.startsWith("/api/")) {
@@ -131,6 +266,18 @@ async function route(request, env) {
   }
 
   return env.ASSETS.fetch(request);
+}
+
+function scheduledDmmApiOptions(cron) {
+  const schedule = DMM_API_SCHEDULES.find((item) => item.cron === cron) || DMM_API_SCHEDULES[1];
+  return {
+    sort: schedule.sort,
+    offset: schedule.offset,
+    limit: schedule.limit,
+    media: schedule.media,
+    scheduleLabel: schedule.label,
+    scheduleJst: schedule.jst,
+  };
 }
 
 async function routeApi(request, env, pathname, url) {
@@ -163,20 +310,44 @@ async function routeApi(request, env, pathname, url) {
 
   if ((request.method === "GET" || request.method === "POST") && pathname === "/api/dmm/import") {
     const dryRun = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dry_run") === "1";
-    const limit = positiveInteger(url.searchParams.get("limit"), env.DMM_RANKING_LIMIT);
-    const detailLimit = positiveInteger(
-      url.searchParams.get("detailLimit") ||
-        url.searchParams.get("detail_limit") ||
-        url.searchParams.get("batchSize") ||
-        url.searchParams.get("batch_size"),
-      env.DMM_RANKING_DETAIL_LIMIT || DEFAULT_RANKING_DETAIL_LIMIT
+    const limit = boundedPositiveInteger(
+      url.searchParams.get("limit"),
+      env.DMM_API_IMPORT_LIMIT || DEFAULT_DMM_API_IMPORT_LIMIT,
+      MAX_DMM_API_IMPORT_LIMIT
     );
+    const hits = boundedPositiveInteger(
+      url.searchParams.get("hits"),
+      env.DMM_API_IMPORT_HITS || DEFAULT_DMM_API_IMPORT_HITS,
+      MAX_DMM_API_IMPORT_HITS
+    );
+    const offset = boundedPositiveInteger(url.searchParams.get("offset"), 1, MAX_DMM_API_OFFSET);
+    const pageLimit = boundedPositiveInteger(
+      url.searchParams.get("pageLimit") || url.searchParams.get("page_limit"),
+      env.DMM_API_IMPORT_PAGE_LIMIT || DEFAULT_DMM_API_IMPORT_PAGE_LIMIT,
+      MAX_DMM_API_IMPORT_PAGE_LIMIT
+    );
+    const sort = normalizeDmmApiSort(url.searchParams.get("sort") || env.DMM_API_IMPORT_SORT);
+    const media = normalizeDmmApiMedia(url.searchParams.get("media") || env.DMM_API_IMPORT_MEDIA);
+    const floor = normalizeDmmApiFloor(url.searchParams.get("floor") || env.DMM_API_IMPORT_FLOOR);
+    const keyword = String(url.searchParams.get("keyword") || "").trim();
     const delayMs = boundedNonNegativeInteger(
       url.searchParams.get("delayMs") || url.searchParams.get("delay_ms"),
-      env.DMM_RANKING_REQUEST_DELAY_MS || DEFAULT_REQUEST_DELAY_MS,
+      env.DMM_API_REQUEST_DELAY_MS || 0,
       MAX_REQUEST_DELAY_MS
     );
-    const result = await importDmmRanking(env, { dryRun, limit, detailLimit, delayMs, manual: true });
+    const result = await importDmmApiItems(env, {
+      dryRun,
+      limit,
+      hits,
+      offset,
+      pageLimit,
+      sort,
+      media,
+      floor,
+      keyword,
+      delayMs,
+      manual: true,
+    });
     return sendJson(result);
   }
 
@@ -189,6 +360,19 @@ async function routeApi(request, env, pathname, url) {
       MAX_REQUEST_DELAY_MS
     );
     const result = await backfillDmmDetails(env, { dryRun, limit, delayMs });
+    return sendJson(result);
+  }
+
+  if ((request.method === "GET" || request.method === "POST") && pathname === "/api/dmm/affiliate-backfill") {
+    const dryRun = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dry_run") === "1";
+    const force = url.searchParams.get("force") === "1";
+    const limit = positiveInteger(url.searchParams.get("limit"), DEFAULT_AFFILIATE_BACKFILL_LIMIT);
+    const delayMs = boundedNonNegativeInteger(
+      url.searchParams.get("delayMs") || url.searchParams.get("delay_ms"),
+      env.DMM_RANKING_REQUEST_DELAY_MS || DEFAULT_REQUEST_DELAY_MS,
+      MAX_REQUEST_DELAY_MS
+    );
+    const result = await backfillDmmAffiliateLinks(env, { dryRun, force, limit, delayMs });
     return sendJson(result);
   }
 
@@ -266,6 +450,275 @@ async function adminAssetResponse(env, request, pathname) {
 async function listArticles(env) {
   const { results } = await env.DB.prepare("SELECT * FROM articles ORDER BY updated_at DESC").all();
   return (results || []).map(rowToMetadata);
+}
+
+const SITE_ARTICLE_COLUMNS = `
+  a.schema_version, a.title, a.slug, a.status, a.article_type, a.source_type,
+  a.published_at, a.updated_at, a.excerpt, a.seo_title, a.product_title,
+  a.circle_name, a.author_name, a.source_url, a.affiliate_url, a.thumbnail_url,
+  a.sample_images_json, a.genres_json, a.emotions_json, a.weekly_pick,
+  a.weekly_pick_order, a.rights_status, a.pr_label, a.automation_ready, a.product_id
+`;
+
+function parseSiteRequest(url) {
+  const rawGenres = normalizeFilterValues(url.searchParams.getAll("genre"));
+  const q = boundedFilterText(url.searchParams.get("q"), 80);
+  const circle = boundedFilterText(url.searchParams.get("circle"), 100);
+  const author = boundedFilterText(url.searchParams.get("author"), 100);
+  const genres = rawGenres
+    .map((genre) => boundedFilterText(genre, 60))
+    .filter(Boolean)
+    .slice(0, SITE_MAX_GENRE_FILTERS);
+  const rawPage = Number(url.searchParams.get("page") || 1);
+  const page = boundedPositiveInteger(rawPage, 1, SITE_MAX_PAGE);
+  const wasTrimmed =
+    rawGenres.length > SITE_MAX_GENRE_FILTERS ||
+    q !== String(url.searchParams.get("q") || "").trim() ||
+    circle !== String(url.searchParams.get("circle") || "").trim() ||
+    author !== String(url.searchParams.get("author") || "").trim() ||
+    genres.some((genre, index) => genre !== rawGenres[index]) ||
+    !Number.isInteger(rawPage) ||
+    rawPage < 1 ||
+    rawPage > SITE_MAX_PAGE;
+
+  return {
+    filters: { q, circle, author, genres },
+    page,
+    wasTrimmed,
+  };
+}
+
+function boundedFilterText(value, maxLength) {
+  return String(value || "").trim().slice(0, maxLength);
+}
+
+async function loadSiteIndexData(env, filters, requestedPage) {
+  await ensureArticleEditorialColumns(env);
+  const filtered = hasActiveFilters(filters);
+  const listWhere = buildSiteWhere(filters, { excludeFeatured: !filtered });
+  const totalStatement = env.DB.prepare(
+    "SELECT COUNT(*) AS total FROM articles a WHERE a.status = 'published'"
+  );
+  const matchedStatement = env.DB.prepare(
+    `SELECT COUNT(*) AS total FROM articles a WHERE ${listWhere.sql}`
+  ).bind(...listWhere.params);
+  const [totalResult, matchedResult] = await env.DB.batch([totalStatement, matchedStatement]);
+  const totalCount = Number(totalResult?.results?.[0]?.total || 0);
+  const matchedCount = Number(matchedResult?.results?.[0]?.total || 0);
+  const pageCount = Math.max(1, Math.ceil(matchedCount / SITE_PAGE_SIZE));
+  const page = Math.min(boundedPositiveInteger(requestedPage, 1, SITE_MAX_PAGE), pageCount);
+  const offset = (page - 1) * SITE_PAGE_SIZE;
+
+  const pageStatement = env.DB.prepare(
+    `SELECT ${SITE_ARTICLE_COLUMNS}
+     FROM articles a
+     WHERE ${listWhere.sql}
+     ORDER BY a.updated_at DESC, a.title ASC
+     LIMIT ? OFFSET ?`
+  ).bind(...listWhere.params, SITE_PAGE_SIZE, offset);
+
+  const circleStatement = env.DB.prepare(
+    `SELECT a.circle_name AS value, COUNT(*) AS count
+     FROM articles a
+     WHERE a.status = 'published' AND a.circle_name <> ''
+     GROUP BY a.circle_name
+     ORDER BY count DESC, value ASC
+     LIMIT ?`
+  ).bind(SITE_FACET_LIMIT);
+
+  const authorWhere = buildFacetWhere(filters, { circle: true });
+  const authorStatement = env.DB.prepare(
+    `SELECT a.author_name AS value, COUNT(*) AS count
+     FROM articles a
+     WHERE ${authorWhere.sql} AND a.author_name <> ''
+     GROUP BY a.author_name
+     ORDER BY count DESC, value ASC
+     LIMIT ?`
+  ).bind(...authorWhere.params, SITE_FACET_LIMIT);
+
+  const genreWhere = buildFacetWhere(filters, { circle: true, author: true });
+  const genreStatement = env.DB.prepare(
+    `SELECT genre.value AS value, COUNT(*) AS count
+     FROM articles a, json_each(a.genres_json) AS genre
+     WHERE ${genreWhere.sql} AND genre.value <> ''
+     GROUP BY genre.value
+     ORDER BY count DESC, value ASC
+     LIMIT ?`
+  ).bind(...genreWhere.params, SITE_FACET_LIMIT);
+
+  const statements = [pageStatement, circleStatement, authorStatement, genreStatement];
+  if (!filtered && page === 1) {
+    statements.push(
+      env.DB.prepare(
+        `SELECT ${SITE_ARTICLE_COLUMNS}
+         FROM articles a
+         WHERE a.status = 'published' AND a.weekly_pick = 1
+         ORDER BY a.weekly_pick_order ASC, a.updated_at DESC
+         LIMIT 6`
+      )
+    );
+  }
+
+  const [pageResult, circleResult, authorResult, genreResult, weeklyResult] =
+    await env.DB.batch(statements);
+
+  return {
+    articles: (pageResult?.results || []).map(rowToMetadata),
+    weeklyPicks: (weeklyResult?.results || []).map(rowToMetadata),
+    facets: {
+      circles: facetRows(circleResult),
+      authors: facetRows(authorResult),
+      genres: facetRows(genreResult),
+    },
+    totalCount,
+    matchedCount,
+    page,
+    pageCount,
+  };
+}
+
+function buildSiteWhere(filters, options = {}) {
+  const clauses = ["a.status = 'published'"];
+  const params = [];
+
+  if (options.excludeFeatured) {
+    clauses.push(
+      `a.slug NOT IN (
+        SELECT featured.slug
+        FROM articles featured
+        WHERE featured.status = 'published' AND featured.weekly_pick = 1
+        ORDER BY featured.weekly_pick_order ASC, featured.updated_at DESC
+        LIMIT 6
+      )`
+    );
+  }
+  if (filters.circle) {
+    clauses.push("a.circle_name = ?");
+    params.push(filters.circle);
+  }
+  if (filters.author) {
+    clauses.push("a.author_name = ?");
+    params.push(filters.author);
+  }
+  for (const genre of filters.genres || []) {
+    clauses.push(
+      "EXISTS (SELECT 1 FROM json_each(a.genres_json) AS selected_genre WHERE selected_genre.value = ?)"
+    );
+    params.push(genre);
+  }
+  if (filters.q) {
+    clauses.push(
+      `instr(
+        lower(
+          coalesce(a.title, '') || ' ' ||
+          coalesce(a.product_title, '') || ' ' ||
+          coalesce(a.excerpt, '') || ' ' ||
+          coalesce(a.circle_name, '') || ' ' ||
+          coalesce(a.author_name, '') || ' ' ||
+          coalesce(a.genres_json, '') || ' ' ||
+          coalesce(a.emotions_json, '')
+        ),
+        lower(?)
+      ) > 0`
+    );
+    params.push(filters.q);
+  }
+
+  return { sql: clauses.join(" AND "), params };
+}
+
+function buildFacetWhere(filters, options = {}) {
+  const clauses = ["a.status = 'published'"];
+  const params = [];
+  if (options.circle && filters.circle) {
+    clauses.push("a.circle_name = ?");
+    params.push(filters.circle);
+  }
+  if (options.author && filters.author) {
+    clauses.push("a.author_name = ?");
+    params.push(filters.author);
+  }
+  return { sql: clauses.join(" AND "), params };
+}
+
+function facetRows(result) {
+  return (result?.results || [])
+    .map((row) => ({
+      value: String(row.value || "").trim(),
+      count: Number(row.count || 0),
+    }))
+    .filter((row) => row.value);
+}
+
+async function loadSiteSearchSuggestions(env) {
+  await ensureArticleEditorialColumns(env);
+  const published = "a.status = 'published'";
+  const [titleResult, circleResult, authorResult, genreResult, emotionResult] =
+    await env.DB.batch([
+      env.DB.prepare(
+        `SELECT a.title AS value, 1 AS count
+         FROM articles a
+         WHERE ${published} AND a.title <> ''
+         ORDER BY a.updated_at DESC
+         LIMIT 160`
+      ),
+      env.DB.prepare(
+        `SELECT a.circle_name AS value, COUNT(*) AS count
+         FROM articles a
+         WHERE ${published} AND a.circle_name <> ''
+         GROUP BY a.circle_name
+         ORDER BY count DESC, value ASC
+         LIMIT 100`
+      ),
+      env.DB.prepare(
+        `SELECT a.author_name AS value, COUNT(*) AS count
+         FROM articles a
+         WHERE ${published} AND a.author_name <> ''
+         GROUP BY a.author_name
+         ORDER BY count DESC, value ASC
+         LIMIT 100`
+      ),
+      env.DB.prepare(
+        `SELECT genre.value AS value, COUNT(*) AS count
+         FROM articles a, json_each(a.genres_json) AS genre
+         WHERE ${published} AND genre.value <> ''
+         GROUP BY genre.value
+         ORDER BY count DESC, value ASC
+         LIMIT 180`
+      ),
+      env.DB.prepare(
+        `SELECT emotion.value AS value, COUNT(*) AS count
+         FROM articles a, json_each(a.emotions_json) AS emotion
+         WHERE ${published} AND emotion.value <> ''
+         GROUP BY emotion.value
+         ORDER BY count DESC, value ASC
+         LIMIT 80`
+      ),
+    ]);
+
+  const titles = suggestionRows(titleResult, "作品");
+  const circles = suggestionRows(circleResult, "サークル");
+  const authors = suggestionRows(authorResult, "作者");
+  const genres = suggestionRows(genreResult, "ジャンル");
+  const emotions = suggestionRows(emotionResult, "タグ");
+
+  return {
+    q: titles,
+    circle: circles,
+    author: authors,
+    genre: genres,
+    tag: emotions,
+  };
+}
+
+function suggestionRows(result, type) {
+  return (result?.results || [])
+    .map((row) => ({
+      value: String(row.value || "").trim(),
+      type,
+      count: Number(row.count || 0),
+    }))
+    .filter((row) => row.value);
 }
 
 async function readArticle(env, slug) {
@@ -405,7 +858,7 @@ async function insertArticle(env, metadata, body, productId) {
       normalizeBody(body),
       productId,
       now,
-      metadata.source_type === "dmm_ranking_h24" ? now : null
+      isDmmImportedSourceType(metadata.source_type) ? now : null
     )
     .run();
 }
@@ -449,11 +902,15 @@ async function updateArticle(env, oldSlug, metadata, body, productId) {
       metadata.automation_ready ? 1 : 0,
       normalizeBody(body),
       productId,
-      metadata.source_type === "dmm_ranking_h24" ? metadata.updated_at : null,
+      isDmmImportedSourceType(metadata.source_type) ? metadata.updated_at : null,
       oldSlug
     )
     .run();
   return Boolean(result?.meta?.changes);
+}
+
+function isDmmImportedSourceType(value) {
+  return String(value || "").startsWith("dmm_");
 }
 
 function normalizeArticle(input, existing = {}) {
@@ -526,6 +983,510 @@ function rowToMetadata(row) {
     automation_ready: Boolean(row.automation_ready),
     product_id: row.product_id || "",
   };
+}
+
+async function renderSitemap(env, origin) {
+  const { results } = await env.DB.prepare(
+    `SELECT slug, published_at, updated_at, circle_name, genres_json
+     FROM articles
+     WHERE status = 'published'
+     ORDER BY updated_at DESC`
+  ).all();
+  const articles = (results || []).map((row) => ({
+    slug: row.slug || "",
+    published_at: row.published_at || "",
+    updated_at: row.updated_at || "",
+    circle_name: row.circle_name || "",
+    genres: parseJsonList(row.genres_json),
+  }));
+  const urls = [];
+  const latest = sitemapLastModified(articles);
+  const addUrl = (path, lastmod = latest, priority = "0.7", changefreq = "weekly") => {
+    urls.push({
+      loc: absoluteSiteUrl(origin, path),
+      lastmod: normalizeSitemapDate(lastmod),
+      priority,
+      changefreq,
+    });
+  };
+
+  addUrl("/site", latest, "1.0", "daily");
+  addUrl("/site/policy", latest, "0.3", "monthly");
+
+  for (const article of articles) {
+    addUrl(`/site/posts/${encodeURIComponent(article.slug)}`, article.updated_at || article.published_at, "0.8", "weekly");
+  }
+
+  for (const genre of sitemapFacetStats(articles, (article) => article.genres || [])) {
+    addUrl(siteFilterUrl({ genre: genre.value }), genre.lastmod, "0.6", "weekly");
+  }
+
+  for (const circle of sitemapFacetStats(articles, (article) => [article.circle_name])) {
+    addUrl(siteFilterUrl({ circle: circle.value }), circle.lastmod, "0.5", "weekly");
+  }
+
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls
+    .map(
+      (item) => `  <url>
+    <loc>${escapeXml(item.loc)}</loc>
+    ${item.lastmod ? `<lastmod>${escapeXml(item.lastmod)}</lastmod>` : ""}
+    <changefreq>${escapeXml(item.changefreq)}</changefreq>
+    <priority>${escapeXml(item.priority)}</priority>
+  </url>`
+    )
+    .join("\n")}\n</urlset>\n`;
+}
+
+function sitemapLastModified(articles) {
+  let latest = "";
+  for (const article of articles) {
+    const value = String(article.updated_at || article.published_at || "");
+    if (value > latest) latest = value;
+  }
+  return latest;
+}
+
+function normalizeSitemapDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function sitemapFacetStats(articles, valuesForArticle) {
+  const stats = new Map();
+  for (const article of articles) {
+    const lastmod = String(article.updated_at || article.published_at || "");
+    const values = new Set(
+      (valuesForArticle(article) || [])
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    );
+    for (const value of values) {
+      const item = stats.get(value) || { value, count: 0, lastmod: "" };
+      item.count += 1;
+      if (lastmod > item.lastmod) item.lastmod = lastmod;
+      stats.set(value, item);
+    }
+  }
+  return [...stats.values()]
+    .sort((a, b) => {
+      if (a.count !== b.count) return b.count - a.count;
+      return a.value.localeCompare(b.value, "ja");
+    })
+    .slice(0, SITEMAP_FILTER_LIMIT);
+}
+
+async function importDmmApiItems(env, options = {}) {
+  const apiId = String(env.DMM_API_ID || "").trim();
+  const affiliateId = String(env.DMM_AFFILIATE_ID || "").trim();
+  const linkAffiliateId = dmmLinkAffiliateId(env, affiliateId);
+  if (!apiId) {
+    throw new Error("DMM_API_ID is missing. Register it as a Worker secret.");
+  }
+  if (!affiliateId) {
+    throw new Error("DMM_AFFILIATE_ID is missing. Register it as a Worker secret.");
+  }
+  if (!isApiAffiliateId(affiliateId)) {
+    throw new Error("DMM_AFFILIATE_ID must end with -990 through -999 for DMM Web Service API.");
+  }
+
+  const startedAt = new Date(options.scheduledTime || Date.now()).toISOString();
+  const dryRun = Boolean(options.dryRun);
+  const limit = boundedPositiveInteger(
+    options.limit,
+    env.DMM_API_IMPORT_LIMIT || DEFAULT_DMM_API_IMPORT_LIMIT,
+    MAX_DMM_API_IMPORT_LIMIT
+  );
+  const hits = boundedPositiveInteger(
+    options.hits,
+    env.DMM_API_IMPORT_HITS || DEFAULT_DMM_API_IMPORT_HITS,
+    MAX_DMM_API_IMPORT_HITS
+  );
+  const offset = boundedPositiveInteger(options.offset, 1, MAX_DMM_API_OFFSET);
+  const pageLimit = boundedPositiveInteger(
+    options.pageLimit,
+    env.DMM_API_IMPORT_PAGE_LIMIT || DEFAULT_DMM_API_IMPORT_PAGE_LIMIT,
+    MAX_DMM_API_IMPORT_PAGE_LIMIT
+  );
+  const sort = normalizeDmmApiSort(options.sort || env.DMM_API_IMPORT_SORT);
+  const media = normalizeDmmApiMedia(options.media || env.DMM_API_IMPORT_MEDIA);
+  const floor = normalizeDmmApiFloor(options.floor || env.DMM_API_IMPORT_FLOOR);
+  const keyword = String(options.keyword || "").trim();
+  const delayMs = boundedNonNegativeInteger(
+    options.delayMs,
+    env.DMM_API_REQUEST_DELAY_MS || 0,
+    MAX_REQUEST_DELAY_MS
+  );
+
+  const summary = {
+    started_at: startedAt,
+    cron: options.cron || "",
+    schedule_label: options.scheduleLabel || "",
+    schedule_jst: options.scheduleJst || "",
+    site: DEFAULT_DMM_API_SITE,
+    service: DEFAULT_DMM_API_SERVICE,
+    floor,
+    sort,
+    media,
+    keyword,
+    offset,
+    limit,
+    hits,
+    page_limit: pageLimit,
+    request_delay_ms: delayMs,
+    dry_run: dryRun,
+    api_requests: 0,
+    total_count: 0,
+    fetched: 0,
+    filtered: 0,
+    seen: 0,
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    failed: 0,
+    counts_before: null,
+    counts_after: null,
+    items: [],
+  };
+
+  summary.counts_before = await articleCounts(env);
+
+  let currentOffset = offset;
+  for (let page = 1; summary.seen < limit && page <= pageLimit; page += 1) {
+    await waitBeforeDetailRequest(summary.api_requests, delayMs);
+    const payload = await fetchDmmApiItemListPage({
+      apiId,
+      affiliateId,
+      site: DEFAULT_DMM_API_SITE,
+      service: DEFAULT_DMM_API_SERVICE,
+      floor,
+      sort,
+      keyword,
+      hits,
+      offset: currentOffset,
+    });
+
+    summary.api_requests += 1;
+    summary.total_count = payload.totalCount;
+    summary.fetched += payload.items.length;
+
+    if (!payload.items.length) break;
+
+    for (let index = 0; index < payload.items.length && summary.seen < limit; index += 1) {
+      const item = payload.items[index];
+      const apiRank = currentOffset + index;
+      if (!dmmApiItemMatchesMedia(item, media)) {
+        summary.filtered += 1;
+        continue;
+      }
+
+      summary.seen += 1;
+      await importOneDmmApiItem(env, item, {
+        affiliateId: linkAffiliateId,
+        dryRun,
+        floor,
+        sort,
+        media,
+        rank: apiRank,
+        summary,
+      });
+    }
+
+    if (payload.items.length < hits) break;
+    currentOffset += hits;
+  }
+
+  summary.counts_after = dryRun ? summary.counts_before : await articleCounts(env);
+
+  console.log(
+    JSON.stringify({
+      level: summary.failed ? "warn" : "info",
+      event: "dmm-api-import",
+      schedule_label: summary.schedule_label,
+      schedule_jst: summary.schedule_jst,
+      floor: summary.floor,
+      sort: summary.sort,
+      media: summary.media,
+      offset: summary.offset,
+      limit: summary.limit,
+      api_requests: summary.api_requests,
+      fetched: summary.fetched,
+      filtered: summary.filtered,
+      seen: summary.seen,
+      created: summary.created,
+      updated: summary.updated,
+      skipped: summary.skipped,
+      failed: summary.failed,
+      counts_before: summary.counts_before,
+      counts_after: summary.counts_after,
+    })
+  );
+
+  return summary;
+}
+
+async function importOneDmmApiItem(env, item, context) {
+  const detail = dmmApiItemDetail(item, context.affiliateId);
+  const itemSummary = {
+    rank: context.rank,
+    product_id: detail.productId,
+    title: detail.title,
+    media_type: detail.mediaType,
+  };
+
+  try {
+    if (!detail.title || !detail.url) {
+      throw new Error("API item is missing title or URL.");
+    }
+
+    const slug = slugify(detail.title);
+    const duplicate = await findDuplicateArticle(env, {
+      slug,
+      productId: detail.productId,
+      urls: [detail.url, detail.affiliateUrl],
+      title: detail.title,
+      circleName: detail.circleName,
+    });
+
+    if (duplicate) {
+      const article = await readArticle(env, duplicate.slug);
+      const updateInput = buildExistingArticleUpdate(article, detail, detail.productId);
+      if (updateInput) {
+        if (!context.dryRun) {
+          await saveArticle(env, updateInput);
+        }
+        context.summary.updated += 1;
+        context.summary.items.push({
+          ...itemSummary,
+          slug: updateInput.slug,
+          status: context.dryRun ? "update-dry-run" : "updated",
+        });
+      } else {
+        context.summary.skipped += 1;
+        context.summary.items.push({ ...itemSummary, status: "skipped", duplicate: duplicate.slug });
+      }
+      return;
+    }
+
+    const article = dmmApiDetailToArticle(detail, {
+      floor: context.floor,
+      sort: context.sort,
+      media: context.media,
+    });
+
+    if (!context.dryRun) {
+      await saveArticle(env, article);
+    }
+
+    context.summary.created += 1;
+    context.summary.items.push({
+      ...itemSummary,
+      slug: article.slug,
+      status: context.dryRun ? "dry-run" : "created",
+    });
+  } catch (error) {
+    context.summary.failed += 1;
+    context.summary.items.push({ ...itemSummary, status: "failed", error: error.message });
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "dmm-api-import-item",
+        rank: context.rank,
+        product_id: detail.productId,
+        title: detail.title,
+        message: error.message,
+      })
+    );
+  }
+}
+
+function dmmApiDetailToArticle(detail, context) {
+  return {
+    title: detail.title,
+    slug: slugify(detail.title),
+    status: "published",
+    article_type: "review",
+    source_type: `dmm_api_${context.floor}_${context.sort}`,
+    published_at: new Date().toISOString(),
+    excerpt: detail.workComment,
+    seo_title: "",
+    product_title: detail.title,
+    circle_name: detail.circleName,
+    author_name: detail.authorName,
+    source_url: detail.url,
+    affiliate_url: detail.affiliateUrl,
+    thumbnail_url: detail.thumbnailUrl,
+    sample_images: detail.sampleImageUrls,
+    genres: detail.genres,
+    emotions: [],
+    rights_status: "pending_review",
+    pr_label: "PR",
+    automation_ready: true,
+    body: defaultArticleBodyMarkdown({
+      title: detail.title,
+      excerpt: detail.workComment,
+      product_title: detail.title,
+      circle_name: detail.circleName,
+      author_name: detail.authorName,
+      genres: detail.genres,
+    }),
+    product_id: detail.productId,
+  };
+}
+
+function dmmApiItemDetail(item, affiliateId) {
+  const title = String(item?.title || "").trim();
+  const url = String(item?.URL || "").trim();
+  const affiliateUrl = normalizeDmmAffiliateUrlForLink(
+    String(item?.affiliateURL || item?.affiliateURLsp || "").trim(),
+    url,
+    affiliateId
+  );
+  const thumbnailUrl = String(item?.imageURL?.large || item?.imageURL?.list || "").trim();
+  const sampleImageUrls = unique(
+    [
+      ...collectDmmApiImageUrls(item?.sampleImageURL?.sample_l?.image),
+      ...collectDmmApiImageUrls(item?.sampleImageURL?.sample_s?.image),
+    ].filter(Boolean)
+  );
+  const genres = dmmApiItemInfoNames(item, "genre");
+  const circleName = dmmApiItemInfoNames(item, "maker")[0] || dmmApiItemInfoNames(item, "circle")[0] || "";
+  const authorName = dmmApiItemInfoNames(item, "author")[0] || "";
+  const productId =
+    String(item?.content_id || item?.product_id || "").trim() ||
+    extractProductId(url) ||
+    extractProductId(affiliateUrl) ||
+    extractProductId(thumbnailUrl);
+  const mediaType = detectDmmApiMedia(item);
+  const detail = {
+    title,
+    productId,
+    url,
+    affiliateUrl,
+    thumbnailUrl,
+    sampleImageUrls,
+    genres,
+    circleName,
+    authorName,
+    mediaType,
+    date: String(item?.date || "").trim(),
+    volume: String(item?.volume || "").trim(),
+    workComment: "",
+  };
+  detail.workComment = buildDmmApiWorkComment(detail);
+  return detail;
+}
+
+function buildDmmApiWorkComment(detail) {
+  const mediaLabels = {
+    comic: "同人コミック",
+    game: "同人ゲーム",
+    cg: "CG・イラスト集",
+    voice: "音声作品",
+  };
+  const mediaLabel = mediaLabels[detail.mediaType] || "FANZA同人作品";
+  const lines = [
+    detail.circleName ? `${detail.circleName}の${mediaLabel}です。` : `${mediaLabel}です。`,
+  ];
+  const facts = [];
+  if (detail.date) facts.push(`配信開始日: ${detail.date}`);
+  if (detail.volume) facts.push(`ボリューム: ${detail.volume}`);
+  if (detail.genres.length) facts.push(`主なジャンル: ${detail.genres.slice(0, 8).join("、")}`);
+  if (facts.length) lines.push(facts.join(" / "));
+  return lines.join("\n");
+}
+
+async function fetchDmmApiItemListPage(options) {
+  const search = new URLSearchParams({
+    api_id: options.apiId,
+    affiliate_id: options.affiliateId,
+    site: options.site,
+    service: options.service,
+    floor: options.floor,
+    hits: String(options.hits),
+    offset: String(options.offset),
+    sort: options.sort,
+    output: "json",
+  });
+  if (options.keyword) search.set("keyword", options.keyword);
+
+  const response = await fetch(`${DMM_ITEMLIST_URL}?${search.toString()}`, {
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    headers: {
+      "User-Agent": USER_AGENT,
+      Accept: "application/json",
+    },
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`request failed ${response.status} ${response.statusText}: ${text.slice(0, 160)}`);
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error(`invalid JSON response: ${text.slice(0, 160)}`);
+  }
+
+  const items = dmmItems(payload);
+  const status = Number(payload?.result?.status || 0);
+  if (status && status !== 200 && !items.length) {
+    throw new Error(`API status ${status}`);
+  }
+
+  return {
+    items,
+    totalCount: Number(payload?.result?.total_count || 0),
+  };
+}
+
+function normalizeDmmApiSort(value) {
+  const sort = String(value || DEFAULT_DMM_API_SORT).trim();
+  return DMM_API_SORT_VALUES.has(sort) ? sort : DEFAULT_DMM_API_SORT;
+}
+
+function normalizeDmmApiMedia(value) {
+  const media = String(value || "comic").trim().toLowerCase();
+  return DMM_API_MEDIA_VALUES.has(media) ? media : "comic";
+}
+
+function normalizeDmmApiFloor(value) {
+  const floor = String(value || DEFAULT_DMM_API_FLOOR).trim();
+  return DMM_API_FLOOR_VALUES.has(floor) ? floor : DEFAULT_DMM_API_FLOOR;
+}
+
+function dmmApiItemMatchesMedia(item, media) {
+  if (media === "all") return true;
+  return detectDmmApiMedia(item) === media;
+}
+
+function detectDmmApiMedia(item) {
+  const urls = [
+    item?.URL,
+    item?.imageURL?.list,
+    item?.imageURL?.large,
+    ...collectDmmApiImageUrls(item?.sampleImageURL),
+  ].join(" ");
+
+  if (/\/digital\/comic\//iu.test(urls)) return "comic";
+  if (/\/digital\/game\//iu.test(urls)) return "game";
+  if (/\/digital\/cg\//iu.test(urls)) return "cg";
+  if (/\/digital\/(?:voice|doujin_voice)\//iu.test(urls)) return "voice";
+  return "";
+}
+
+function dmmApiItemInfoNames(item, key) {
+  const values = item?.iteminfo?.[key];
+  if (!Array.isArray(values)) return [];
+  return unique(values.map((value) => String(value?.name || "").trim()).filter(Boolean));
+}
+
+function collectDmmApiImageUrls(value) {
+  if (!value) return [];
+  if (typeof value === "string") return /^https?:\/\//iu.test(value) ? [value] : [];
+  if (Array.isArray(value)) return value.flatMap((item) => collectDmmApiImageUrls(item));
+  if (typeof value === "object") return Object.values(value).flatMap((item) => collectDmmApiImageUrls(item));
+  return [];
 }
 
 async function importDmmRanking(env, options = {}) {
@@ -619,9 +1580,11 @@ async function importDmmRanking(env, options = {}) {
         extractProductId(detail.thumbnailUrl) ||
         earlyProductId ||
         null;
+      const affiliateUrl = await resolveDmmAffiliateUrl(env, { productId, sourceUrl: detail.url });
+      const detailWithAffiliate = { ...detail, affiliateUrl: affiliateUrl || detail.url };
 
       if (earlyDuplicate) {
-        const updateInput = buildExistingArticleUpdate(earlyExistingArticle, detail, productId);
+        const updateInput = buildExistingArticleUpdate(earlyExistingArticle, detailWithAffiliate, productId);
         if (updateInput) {
           if (!dryRun) {
             await saveArticle(env, updateInput);
@@ -650,7 +1613,7 @@ async function importDmmRanking(env, options = {}) {
 
       if (duplicate) {
         const duplicateArticle = await readArticle(env, duplicate.slug);
-        const updateInput = buildExistingArticleUpdate(duplicateArticle, detail, productId);
+        const updateInput = buildExistingArticleUpdate(duplicateArticle, detailWithAffiliate, productId);
         if (updateInput) {
           if (!dryRun) {
             await saveArticle(env, updateInput);
@@ -682,7 +1645,7 @@ async function importDmmRanking(env, options = {}) {
         circle_name: item.circleName,
         author_name: "",
         source_url: detail.url,
-        affiliate_url: detail.url,
+        affiliate_url: affiliateUrl || detail.url,
         thumbnail_url: detail.thumbnailUrl,
         sample_images: detail.sampleImageUrls,
         genres: detail.genres,
@@ -806,7 +1769,7 @@ function buildExistingArticleUpdate(article, detail, productId) {
   const currentGenres = metadata.genres || [];
   const nextExcerpt = metadata.excerpt || detail.workComment || "";
   const nextSourceUrl = metadata.source_url || detail.url || "";
-  const nextAffiliateUrl = metadata.affiliate_url || detail.url || "";
+  const nextAffiliateUrl = preferredAffiliateUrl(metadata.affiliate_url, detail.affiliateUrl, detail.url);
   const nextThumbnailUrl = metadata.thumbnail_url || detail.thumbnailUrl || "";
   const nextGenres = currentGenres.length ? currentGenres : detail.genres || [];
   const currentSampleImages = metadata.sample_images || [];
@@ -838,6 +1801,15 @@ function buildExistingArticleUpdate(article, detail, productId) {
     body: articleBodyMarkdown(nextMetadata, article.body),
     product_id: productId || metadata.product_id || "",
   };
+}
+
+function preferredAffiliateUrl(currentValue, affiliateValue, fallbackValue = "") {
+  const current = String(currentValue || "").trim();
+  const affiliate = String(affiliateValue || "").trim();
+  const fallback = String(fallbackValue || "").trim();
+  if (!current) return affiliate || fallback;
+  if (affiliate && !isDmmAffiliateLink(current) && isDmmAffiliateLink(affiliate)) return affiliate;
+  return current;
 }
 
 function arraysEqual(left, right) {
@@ -895,7 +1867,12 @@ async function backfillDmmDetails(env, options = {}) {
         extractProductId(detail.thumbnailUrl) ||
         extractProductId(detailUrl) ||
         null;
-      const updateInput = buildExistingArticleUpdate(article, detail, productId);
+      const affiliateUrl = await resolveDmmAffiliateUrl(env, { productId, sourceUrl: detail.url });
+      const updateInput = buildExistingArticleUpdate(
+        article,
+        { ...detail, affiliateUrl: affiliateUrl || detail.url },
+        productId
+      );
 
       if (!updateInput) {
         summary.skipped += 1;
@@ -920,6 +1897,368 @@ async function backfillDmmDetails(env, options = {}) {
   }
 
   return summary;
+}
+
+async function backfillDmmAffiliateLinks(env, options = {}) {
+  const apiId = String(env.DMM_API_ID || "").trim();
+  const affiliateId = String(env.DMM_AFFILIATE_ID || "").trim();
+  const linkAffiliateId = dmmLinkAffiliateId(env, affiliateId);
+  if (!apiId) {
+    throw new Error("DMM_API_ID is missing. Register it as a Worker secret.");
+  }
+  if (!affiliateId) {
+    throw new Error("DMM_AFFILIATE_ID is missing. Register it as a Worker secret.");
+  }
+  if (!isApiAffiliateId(affiliateId)) {
+    throw new Error("DMM_AFFILIATE_ID must end with -990 through -999 for DMM Web Service API.");
+  }
+
+  const dryRun = Boolean(options.dryRun);
+  const force = Boolean(options.force);
+  const limit = positiveInteger(options.limit, DEFAULT_AFFILIATE_BACKFILL_LIMIT);
+  const delayMs = boundedNonNegativeInteger(
+    options.delayMs,
+    env.DMM_RANKING_REQUEST_DELAY_MS || DEFAULT_REQUEST_DELAY_MS,
+    MAX_REQUEST_DELAY_MS
+  );
+  const candidates = (await listArticles(env))
+    .filter((metadata) => collectProductIds(metadata).length)
+    .filter((metadata) => force || !isDmmAffiliateLink(metadata.affiliate_url))
+    .slice(0, limit);
+
+  const summary = {
+    dry_run: dryRun,
+    force,
+    limit,
+    request_delay_ms: delayMs,
+    seen: candidates.length,
+    updated: 0,
+    skipped: 0,
+    failed: 0,
+    api_requests: 0,
+    items: [],
+  };
+
+  for (const metadata of candidates) {
+    try {
+      const productIds = collectProductIds(metadata);
+      if (!productIds.length) {
+        summary.skipped += 1;
+        summary.items.push({ slug: metadata.slug, status: "skipped", error: "product-id-not-found" });
+        continue;
+      }
+
+      await waitBeforeDetailRequest(summary.api_requests, delayMs);
+      const lookup = await lookupDmmAffiliateItem({
+        apiId,
+        affiliateId,
+        productIds,
+        sourceUrl: metadata.source_url || metadata.affiliate_url || "",
+      });
+      summary.api_requests += lookup.requests;
+
+      if (!lookup.item) {
+        const fallbackUrl = buildDmmAffiliateUrl(metadata.source_url || metadata.affiliate_url, linkAffiliateId);
+        if (!fallbackUrl) {
+          summary.failed += 1;
+          summary.items.push({
+            slug: metadata.slug,
+            status: "failed",
+            product_id: productIds[0],
+            error: lookup.errors[0] || "affiliateURL not found",
+          });
+          continue;
+        }
+
+        if (!dryRun) {
+          const article = await readArticle(env, metadata.slug);
+          await saveArticle(env, {
+            ...article.metadata,
+            old_slug: article.metadata.slug,
+            source_url: article.metadata.source_url || metadata.source_url || "",
+            affiliate_url: fallbackUrl,
+            body: article.body,
+            product_id: article.metadata.product_id || productIds[0],
+          });
+        }
+
+        summary.updated += 1;
+        summary.items.push({
+          slug: metadata.slug,
+          status: dryRun ? "fallback-dry-run" : "fallback-updated",
+          product_id: productIds[0],
+        });
+        continue;
+      }
+
+      const affiliateUrl = normalizeDmmAffiliateUrlForLink(
+        String(lookup.item.affiliateURL || lookup.item.affiliateURLsp || "").trim(),
+        lookup.item.URL || metadata.source_url || metadata.affiliate_url,
+        linkAffiliateId
+      );
+      if (!affiliateUrl) {
+        summary.failed += 1;
+        summary.items.push({
+          slug: metadata.slug,
+          status: "failed",
+          product_id: lookup.productId || productIds[0],
+          error: "affiliateURL is empty",
+        });
+        continue;
+      }
+
+      if (!force && metadata.affiliate_url === affiliateUrl) {
+        summary.skipped += 1;
+        summary.items.push({
+          slug: metadata.slug,
+          status: "skipped",
+          product_id: lookup.productId || productIds[0],
+        });
+        continue;
+      }
+
+      if (!dryRun) {
+        const article = await readArticle(env, metadata.slug);
+        await saveArticle(env, {
+          ...article.metadata,
+          old_slug: article.metadata.slug,
+          source_url: article.metadata.source_url || lookup.item.URL || "",
+          affiliate_url: affiliateUrl,
+          body: article.body,
+          product_id:
+            article.metadata.product_id ||
+            lookup.productId ||
+            extractProductId(lookup.item.URL) ||
+            extractProductId(affiliateUrl),
+        });
+      }
+
+      summary.updated += 1;
+      summary.items.push({
+        slug: metadata.slug,
+        status: dryRun ? "update-dry-run" : "updated",
+        product_id: lookup.productId || productIds[0],
+      });
+    } catch (error) {
+      summary.failed += 1;
+      summary.items.push({ slug: metadata.slug, status: "failed", error: error.message });
+    }
+  }
+
+  return summary;
+}
+
+async function resolveDmmAffiliateUrl(env, options = {}) {
+  const apiId = String(env.DMM_API_ID || "").trim();
+  const affiliateId = String(env.DMM_AFFILIATE_ID || "").trim();
+  const linkAffiliateId = dmmLinkAffiliateId(env, affiliateId);
+  if (!apiId || !affiliateId || !isApiAffiliateId(affiliateId)) return "";
+
+  const productIds = unique([
+    options.productId,
+    extractProductId(options.sourceUrl),
+    extractProductId(options.thumbnailUrl),
+  ]);
+  if (!productIds.length) return "";
+
+  try {
+    const lookup = await lookupDmmAffiliateItem({
+      apiId,
+      affiliateId,
+      productIds,
+      sourceUrl: options.sourceUrl || "",
+    });
+    return normalizeDmmAffiliateUrlForLink(
+      String(lookup.item?.affiliateURL || lookup.item?.affiliateURLsp || "").trim(),
+      lookup.item?.URL || options.sourceUrl,
+      linkAffiliateId
+    );
+  } catch (error) {
+    console.error(JSON.stringify({ level: "warn", event: "dmm-affiliate-lookup", message: error.message }));
+    return buildDmmAffiliateUrl(options.sourceUrl, linkAffiliateId);
+  }
+}
+
+async function lookupDmmAffiliateItem(options) {
+  const errors = [];
+  let requests = 0;
+
+  for (const productId of options.productIds) {
+    for (const config of dmmLookupConfigs(productId)) {
+      try {
+        requests += 1;
+        const payload = await fetchDmmItemList({
+          apiId: options.apiId,
+          affiliateId: options.affiliateId,
+          productId,
+          ...config,
+        });
+        const item = selectDmmItem(payload, productId, options.sourceUrl);
+        if (item?.affiliateURL || item?.affiliateURLsp) {
+          return { item, productId, config, requests, errors };
+        }
+      } catch (error) {
+        errors.push(`${config.site}/${config.service || "*"}/${config.floor || "*"}: ${error.message}`);
+      }
+    }
+  }
+
+  return { item: null, productId: "", config: null, requests, errors };
+}
+
+async function fetchDmmItemList(options) {
+  const search = new URLSearchParams({
+    api_id: options.apiId,
+    affiliate_id: options.affiliateId,
+    site: options.site,
+    cid: options.productId,
+    hits: "1",
+    output: "json",
+  });
+  if (options.service) search.set("service", options.service);
+  if (options.floor) search.set("floor", options.floor);
+
+  const response = await fetch(`${DMM_ITEMLIST_URL}?${search.toString()}`, {
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    headers: {
+      "User-Agent": USER_AGENT,
+      Accept: "application/json",
+    },
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`request failed ${response.status} ${response.statusText}: ${text.slice(0, 160)}`);
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error(`invalid JSON response: ${text.slice(0, 160)}`);
+  }
+
+  const items = dmmItems(payload);
+  const status = Number(payload?.result?.status || 0);
+  if (status && status !== 200 && !items.length) {
+    throw new Error(`API status ${status}`);
+  }
+  return payload;
+}
+
+function selectDmmItem(payload, productId, sourceUrl) {
+  const items = dmmItems(payload);
+  if (!items.length) return null;
+
+  const productKey = normalizeKey(productId);
+  return (
+    items.find((item) => {
+      const ids = [item.content_id, item.product_id, extractProductId(item.URL), extractProductId(item.affiliateURL)];
+      return ids.some((id) => normalizeKey(id) === productKey);
+    }) ||
+    items.find((item) => sourceUrl && normalizeUrlKey(item.URL) === normalizeUrlKey(sourceUrl)) ||
+    items[0]
+  );
+}
+
+function dmmItems(payload) {
+  const items = payload?.result?.items;
+  return Array.isArray(items) ? items : [];
+}
+
+function dmmLookupConfigs(productId) {
+  const fanzaDoujin = { site: "FANZA", service: "doujin", floor: "digital_doujin" };
+  const fanzaDoujinBl = { site: "FANZA", service: "doujin", floor: "digital_doujin_bl" };
+  const fanzaDoujinTl = { site: "FANZA", service: "doujin", floor: "digital_doujin_tl" };
+  const fanzaEbookComic = { site: "FANZA", service: "ebook", floor: "comic" };
+  const fanzaAny = { site: "FANZA" };
+  const dmmComic = { site: "DMM.com", service: "ebook", floor: "comic" };
+  const dmmAny = { site: "DMM.com" };
+
+  if (/^d_\d+$/iu.test(productId)) {
+    return [fanzaDoujin, fanzaDoujinBl, fanzaDoujinTl, fanzaEbookComic, fanzaAny, dmmComic, dmmAny];
+  }
+  if (/^b[0-9a-z]+$/iu.test(productId)) return [fanzaEbookComic, dmmComic, dmmAny, fanzaAny];
+  return [fanzaDoujin, fanzaDoujinBl, fanzaDoujinTl, fanzaEbookComic, fanzaAny, dmmComic, dmmAny];
+}
+
+function collectProductIds(metadata) {
+  return unique([
+    metadata.product_id,
+    extractProductId(metadata.source_url),
+    extractProductId(metadata.affiliate_url),
+    extractProductId(metadata.thumbnail_url),
+    ...((metadata.sample_images || []).map((url) => extractProductId(url))),
+  ]);
+}
+
+function isDmmAffiliateLink(value) {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase();
+    return (
+      (hostname === "al.fanza.co.jp" || hostname === "al.dmm.co.jp") &&
+      Boolean(url.searchParams.get("af_id"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function dmmLinkAffiliateId(env, fallback = "") {
+  return String(
+    env.DMM_LINK_AFFILIATE_ID ||
+      env.DMM_SITE_AFFILIATE_ID ||
+      env.DMM_WEB_AFFILIATE_ID ||
+      fallback ||
+      ""
+  ).trim();
+}
+
+function normalizeDmmAffiliateUrlForLink(value, sourceUrl, affiliateId) {
+  const linkId = String(affiliateId || "").trim();
+  const current = String(value || "").trim();
+  if (!linkId) return current || "";
+
+  try {
+    const url = new URL(current);
+    const hostname = url.hostname.toLowerCase();
+    if (hostname === "al.fanza.co.jp" || hostname === "al.dmm.co.jp") {
+      url.searchParams.set("af_id", linkId);
+      if (!url.searchParams.get("ch")) url.searchParams.set("ch", "api");
+      return url.href;
+    }
+  } catch {
+    // Build a fresh affiliate URL below.
+  }
+
+  return buildDmmAffiliateUrl(sourceUrl || current, linkId);
+}
+
+function buildDmmAffiliateUrl(value, affiliateId) {
+  try {
+    const landingUrl = new URL(value);
+    landingUrl.hash = "";
+    const hostname = landingUrl.hostname.toLowerCase();
+    const path = landingUrl.pathname.toLowerCase();
+    const affiliateHost =
+      hostname.includes("fanza") ||
+      path.includes("/dc/doujin") ||
+      hostname === "video.dmm.co.jp" ||
+      path.includes("/digital/video")
+        ? "al.fanza.co.jp"
+        : "al.dmm.co.jp";
+    const url = new URL(`https://${affiliateHost}/`);
+    url.searchParams.set("lurl", landingUrl.href);
+    url.searchParams.set("af_id", affiliateId);
+    url.searchParams.set("ch", "api");
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+function isApiAffiliateId(value) {
+  return /-\d{3}$/u.test(value) && Number(value.slice(-3)) >= 990 && Number(value.slice(-3)) <= 999;
 }
 
 function isDmmUrl(value) {
@@ -1269,8 +2608,21 @@ function decodeEntities(value) {
 
 function extractProductId(value) {
   const decoded = decodeEntities(String(value || ""));
+  try {
+    const url = new URL(decoded);
+    const nestedUrl = url.searchParams.get("lurl") || "";
+    if (nestedUrl && nestedUrl !== decoded) {
+      const nestedId = extractProductId(nestedUrl);
+      if (nestedId) return nestedId;
+    }
+  } catch {
+    // Continue with pattern extraction.
+  }
+
   const patterns = [
     /[?&]cid=([^/?&#]+)/iu,
+    /[?&]product_id=([^/?&#]+)/iu,
+    /\/product\/\d+\/([^/?&#]+)/iu,
     /\/digital\/comic\/([^/?&#]+)/iu,
     /\/(d_\d+)(?:[/?#._-]|$)/iu,
     /\b(d_\d+)(?=pr\.|pl\.)/iu,
@@ -1299,26 +2651,30 @@ function sortArticlesByUpdatedAt(articles) {
 
 function renderSiteIndex(articles, context = {}) {
   const filters = context.filters || {};
-  const allArticles = context.allArticles || articles;
-  const countSummary = renderCountSummary(articles.length, allArticles.length, filters);
+  const totalCount = Number(context.totalCount || 0);
+  const matchedCount = Number(context.matchedCount || 0);
+  const page = positiveInteger(context.page, 1);
+  const pageCount = positiveInteger(context.pageCount, 1);
+  const facets = context.facets || {};
   const filtered = hasActiveFilters(filters);
-  const weeklyPicks = filtered ? [] : sortWeeklyPicks(allArticles.filter((article) => article.weekly_pick));
-  const listArticles = weeklyPicks.length ? articles.filter((article) => !article.weekly_pick) : articles;
-  const circles = distinctValues(allArticles.map((article) => article.circle_name));
-  const authors = distinctValues(
-    allArticles
-      .filter((article) => !filters.circle || article.circle_name === filters.circle)
-      .map((article) => article.author_name)
-  );
-  const genres = distinctValues(
-    allArticles
-      .filter((article) => !filters.circle || article.circle_name === filters.circle)
-      .filter((article) => !filters.author || article.author_name === filters.author)
-      .flatMap((article) => article.genres || [])
-  );
+  const weeklyPicks = filtered ? [] : context.weeklyPicks || [];
+  const pageArticles = articles;
+  const countSummary = renderCountSummary(pageArticles.length, totalCount, filters, {
+    matchedCount,
+    page,
+    pageCount,
+    pageSize: SITE_PAGE_SIZE,
+  });
+  const circles = facets.circles || [];
+  const authors = facets.authors || [];
+  const genres = facets.genres || [];
   const breadcrumb = renderBreadcrumb(filters);
   const activeLabel = renderActiveFilterLabel(filters);
-  const cards = listArticles
+  const filterNotice =
+    context.notice === "filters-trimmed"
+      ? `<p class="filter-notice">検索条件を整理しました。ジャンルは最大${SITE_MAX_GENRE_FILTERS}件まで指定できます。</p>`
+      : "";
+  const cards = pageArticles
     .map((article) => {
       const labels =
         renderGenreTags((article.genres || []).slice(0, 8), filters) +
@@ -1331,7 +2687,7 @@ function renderSiteIndex(articles, context = {}) {
         : "";
       return `
         <article class="post-card">
-          ${article.thumbnail_url ? `<a class="post-image-link" href="/site/posts/${encodeURIComponent(article.slug)}"><img src="${escapeHtml(article.thumbnail_url)}" alt=""></a>` : ""}
+          ${article.thumbnail_url ? `<a class="post-image-link" href="/site/posts/${encodeURIComponent(article.slug)}"><img src="${escapeHtml(article.thumbnail_url)}" alt="" loading="lazy" decoding="async"></a>` : ""}
           <div>
             <h2><a href="/site/posts/${encodeURIComponent(article.slug)}">${escapeBreakableText(article.title)}</a></h2>
             ${circleLink || authorLink ? `<p class="work-meta">${circleLink}${circleLink && authorLink ? " / " : ""}${authorLink}</p>` : ""}
@@ -1342,67 +2698,127 @@ function renderSiteIndex(articles, context = {}) {
       `;
     })
     .join("");
+  const pagination = renderPagination({
+    filters,
+    page,
+    pageCount,
+    totalCount: matchedCount,
+    pageSize: SITE_PAGE_SIZE,
+  });
+  const origin = context.origin || "";
+  const seoTitle = siteIndexSeoTitle(filters, page);
+  const seoDescription = siteIndexSeoDescription(filters, matchedCount, totalCount);
+  const canonicalUrl = origin ? absoluteSiteUrl(origin, siteFilterUrl({ ...filters, page })) : "";
+  const jsonLd = origin
+    ? collectionJsonLd({
+        origin,
+        title: seoTitle,
+        description: seoDescription,
+        url: canonicalUrl,
+        articles: pageArticles,
+      })
+    : null;
+  const heading = siteIndexHeading(filters);
 
-  return pageShell(SITE_NAME, `
+  return pageShell(seoTitle, `
     <main class="site-shell">
       <header class="site-header">
         <p>18歳未満閲覧禁止 / 商品リンクはPRを含みます</p>
-        <h1>${SITE_NAME}</h1>
+        <h1>${escapeBreakableText(heading)}</h1>
         ${countSummary}
         ${breadcrumb}
       </header>
       ${renderWeeklyPickSection(weeklyPicks)}
       <div class="catalog-layout">
         <aside class="filter-panel">
-          <form method="get" action="/site" class="filter-form" data-suggest-form>
-            ${renderSuggestField({
-              field: "q",
-              label: "キーワード",
-              value: filters.q || "",
-              placeholder: "タイトル、サークル、作者、タグ",
-            })}
-            ${renderSuggestField({
-              field: "circle",
-              label: "サークル",
-              value: filters.circle || "",
-              placeholder: "例: サークル名",
-            })}
-            ${renderSuggestField({
-              field: "author",
-              label: "作者",
-              value: filters.author || "",
-              placeholder: "例: 作者名",
-            })}
-            ${renderSuggestField({
-              field: "genre",
-              label: "ジャンル",
-              value: (filters.genres || []).join(" "),
-              placeholder: "例: 制服 巨乳",
-            })}
-            <button type="submit">検索</button>
-            <a class="ghost-link" href="/site">解除</a>
-          </form>
-          ${renderSearchSuggestionScript(allArticles)}
-          ${activeLabel ? `<div class="active-filter">${activeLabel}</div>` : ""}
-          <div class="filter-links">
-            <section>
-              <h2>サークル</h2>
-              <div class="tags filter-tags">${circles.map((circle) => `<a href="${siteFilterUrl({ q: filters.q, circle, author: filters.author, genres: filters.genres })}">${escapeHtml(circle)}</a>`).join("") || "<span>未登録</span>"}</div>
-            </section>
-            <section>
-              <h2>作者</h2>
-              <div class="tags filter-tags">${authors.map((author) => `<a href="${siteFilterUrl({ q: filters.q, circle: filters.circle, author, genres: filters.genres })}">${escapeHtml(author)}</a>`).join("") || "<span>未登録</span>"}</div>
-            </section>
-            <section>
-              <h2>ジャンル</h2>
-              <div class="tags filter-tags">${genres.map((genre) => renderGenreFilterLink(genre, filters)).join("") || "<span>未登録</span>"}</div>
-            </section>
-          </div>
+          <details class="filter-disclosure" data-filter-disclosure>
+            <summary>作品を絞り込む${filtered ? "（条件指定中）" : ""}</summary>
+            <div class="filter-disclosure-body">
+              <form method="get" action="/site" class="filter-form" data-suggest-form data-suggest-url="/site/suggestions.json">
+                ${renderSuggestField({
+                  field: "q",
+                  label: "キーワード",
+                  value: filters.q || "",
+                  placeholder: "タイトル、サークル、作者、タグ",
+                })}
+                ${renderSuggestField({
+                  field: "circle",
+                  label: "サークル",
+                  value: filters.circle || "",
+                  placeholder: "例: サークル名",
+                })}
+                ${renderSuggestField({
+                  field: "author",
+                  label: "作者",
+                  value: filters.author || "",
+                  placeholder: "例: 作者名",
+                })}
+                ${renderSuggestField({
+                  field: "genre",
+                  label: "ジャンル",
+                  value: (filters.genres || []).join(" "),
+                  placeholder: `最大${SITE_MAX_GENRE_FILTERS}件: 制服 巨乳`,
+                })}
+                <button type="submit">検索</button>
+                <a class="ghost-link" href="/site">解除</a>
+              </form>
+              ${filterNotice}
+              ${activeLabel ? `<div class="active-filter">${activeLabel}</div>` : ""}
+              <div class="filter-links">
+                <section>
+                  <h2>人気サークル</h2>
+                  <div class="tags filter-tags">${circles.map((item) => `<a href="${siteFilterUrl({ q: filters.q, circle: item.value, author: filters.author, genres: filters.genres })}" title="${formatCount(item.count)}件">${escapeHtml(item.value)}</a>`).join("") || "<span>未登録</span>"}</div>
+                </section>
+                <section>
+                  <h2>人気作者</h2>
+                  <div class="tags filter-tags">${authors.map((item) => `<a href="${siteFilterUrl({ q: filters.q, circle: filters.circle, author: item.value, genres: filters.genres })}" title="${formatCount(item.count)}件">${escapeHtml(item.value)}</a>`).join("") || "<span>未登録</span>"}</div>
+                </section>
+                <section>
+                  <h2>人気ジャンル</h2>
+                  <div class="tags filter-tags">${genres.map((item) => renderGenreFilterLink(item.value, filters, item.count)).join("") || "<span>未登録</span>"}</div>
+                </section>
+              </div>
+            </div>
+          </details>
         </aside>
-        <section class="post-grid">${cards || "<p>記事はまだありません。</p>"}</section>
+        <section class="post-grid">
+          ${cards || "<p>記事はまだありません。</p>"}
+          ${pagination}
+        </section>
       </div>
     </main>
-  `);
+  `, {
+    description: seoDescription,
+    canonicalUrl,
+    jsonLd,
+    ogType: "website",
+  });
+}
+
+function siteIndexHeading(filters = {}) {
+  const parts = [];
+  if (filters.q) parts.push(`「${filters.q}」検索`);
+  if (filters.circle) parts.push(`${filters.circle}`);
+  if (filters.author) parts.push(`${filters.author}`);
+  if ((filters.genres || []).length) parts.push(`${filters.genres.join("・")}`);
+  if (parts.length) return `${parts.join(" / ")}の同人誌・エロ漫画`;
+  return "同人誌・エロ漫画レビュー一覧";
+}
+
+function siteIndexSeoTitle(filters = {}, page = 1) {
+  const pageSuffix = page > 1 ? ` ${page}ページ目` : "";
+  return `${siteIndexHeading(filters)}${pageSuffix} | ${SITE_NAME}`;
+}
+
+function siteIndexSeoDescription(filters = {}, matchedCount = 0, totalCount = 0) {
+  const target = siteIndexHeading(filters);
+  const countText = hasActiveFilters(filters)
+    ? `${formatCount(matchedCount)}件の該当作品`
+    : `${formatCount(totalCount)}件の掲載作品`;
+  return truncateText(
+    `${target}を${countText}から探せます。サークル、作者、ジャンル、試し読みで確認したいポイントを整理した大人向け作品紹介サイトです。`,
+    155
+  );
 }
 
 function renderSuggestField({ field, label, value, placeholder }) {
@@ -1419,75 +2835,6 @@ function renderSuggestField({ field, label, value, placeholder }) {
   `;
 }
 
-function renderSearchSuggestionScript(articles) {
-  return `<script type="application/json" id="site-search-suggestions">${jsonForScript(buildSearchSuggestions(articles))}</script>`;
-}
-
-function buildSearchSuggestions(articles) {
-  const maps = {
-    q: new Map(),
-    circle: new Map(),
-    author: new Map(),
-    genre: new Map(),
-  };
-
-  const add = (map, value, type, article) => {
-    const text = String(value || "").trim();
-    if (!text) return;
-    const key = normalizeKey(text);
-    const item = map.get(key) || {
-      value: text,
-      type,
-      count: 0,
-      circles: new Set(),
-      authors: new Set(),
-    };
-    item.count += 1;
-    if (article?.circle_name) item.circles.add(article.circle_name);
-    if (article?.author_name) item.authors.add(article.author_name);
-    map.set(key, item);
-  };
-
-  for (const article of articles) {
-    add(maps.q, article.title, "作品", article);
-    add(maps.q, article.product_title, "作品", article);
-    add(maps.q, article.circle_name, "サークル", article);
-    add(maps.q, article.author_name, "作者", article);
-    for (const genre of article.genres || []) {
-      add(maps.q, genre, "ジャンル", article);
-      add(maps.genre, genre, "ジャンル", article);
-    }
-    for (const emotion of article.emotions || []) {
-      add(maps.q, emotion, "タグ", article);
-    }
-    add(maps.circle, article.circle_name, "サークル", article);
-    add(maps.author, article.author_name, "作者", article);
-  }
-
-  return {
-    q: serializeSuggestions(maps.q, 420),
-    circle: serializeSuggestions(maps.circle, 220),
-    author: serializeSuggestions(maps.author, 220),
-    genre: serializeSuggestions(maps.genre, 260),
-  };
-}
-
-function serializeSuggestions(map, limit) {
-  return [...map.values()]
-    .sort((a, b) => {
-      if (a.count !== b.count) return b.count - a.count;
-      return a.value.localeCompare(b.value, "ja");
-    })
-    .slice(0, limit)
-    .map((item) => ({
-      value: item.value,
-      type: item.type,
-      count: item.count,
-      circles: [...item.circles],
-      authors: [...item.authors],
-    }));
-}
-
 function jsonForScript(value) {
   return JSON.stringify(value)
     .replace(/</gu, "\\u003c")
@@ -1497,7 +2844,8 @@ function jsonForScript(value) {
     .replace(/\u2029/gu, "\\u2029");
 }
 
-function renderPolicyPage() {
+function renderPolicyPage(options = {}) {
+  const canonicalUrl = options.origin ? absoluteSiteUrl(options.origin, "/site/policy") : "";
   return pageShell("運営情報・サイトポリシー", `
     <main class="site-shell static-page">
       <p><a href="/site">← 作品一覧へ戻る</a></p>
@@ -1533,13 +2881,18 @@ function renderPolicyPage() {
         <p>掲載内容は確認時点の情報です。正確性には注意していますが、最新情報や購入条件はリンク先の販売ページを優先してください。</p>
       </section>
     </main>
-  `);
+  `, {
+    description: `${SITE_NAME}の運営情報、広告リンク、画像掲載、プライバシー、免責事項についてまとめています。`,
+    canonicalUrl,
+    robots: "index,follow",
+  });
 }
 
 function renderContactPage(state = {}) {
   const values = state.values || {};
   const errors = state.errors || [];
   const success = Boolean(state.success);
+  const canonicalUrl = state.origin ? absoluteSiteUrl(state.origin, "/site/contact") : "";
   return pageShell("お問い合わせ", `
     <main class="site-shell static-page">
       <p><a href="/site">← 作品一覧へ戻る</a></p>
@@ -1566,10 +2919,15 @@ function renderContactPage(state = {}) {
         <button type="submit">送信</button>
       </form>
     </main>
-  `);
+  `, {
+    description: `${SITE_NAME}への掲載内容、権利関係、サイト運営に関するお問い合わせページです。`,
+    canonicalUrl,
+    robots: "noindex,follow",
+  });
 }
 
 async function handleContactSubmit(request, env) {
+  const url = new URL(request.url);
   const form = await request.formData();
   const values = {
     name: String(form.get("name") || "").trim().slice(0, 80),
@@ -1586,7 +2944,7 @@ async function handleContactSubmit(request, env) {
   }
 
   if (errors.length) {
-    return sendHtml(renderContactPage({ values, errors }), 400);
+    return sendHtml(renderContactPage({ values, errors, origin: url.origin }), 400);
   }
 
   await ensureContactMessagesTable(env);
@@ -1596,7 +2954,7 @@ async function handleContactSubmit(request, env) {
     .bind(crypto.randomUUID(), new Date().toISOString(), values.name, values.email, values.message)
     .run();
 
-  return sendHtml(renderContactPage({ success: true }));
+  return sendHtml(renderContactPage({ success: true, origin: url.origin }));
 }
 
 function sortWeeklyPicks(articles) {
@@ -1640,6 +2998,7 @@ function renderWeeklyPickCard(article) {
 
 function renderArticlePage(article, options = {}) {
   const metadata = article.metadata;
+  const origin = options.origin || "";
   const productLink = productPageUrl(metadata);
   const labels =
     renderGenreTags(metadata.genres || []) +
@@ -1658,8 +3017,17 @@ function renderArticlePage(article, options = {}) {
       ? `<a class="image-product-link hero-link" href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer" aria-label="商品ページを開く"><img class="hero-image" src="${escapeHtml(metadata.thumbnail_url)}" alt=""></a>`
       : `<img class="hero-image" src="${escapeHtml(metadata.thumbnail_url)}" alt="">`
     : "";
+  const canonicalUrl = origin ? absoluteSiteUrl(origin, `/site/posts/${encodeURIComponent(metadata.slug)}`) : "";
+  const description = articleSeoDescription(metadata);
+  const seoTitle = `${metadata.title}のレビュー・試し読み情報 | ${SITE_NAME}`;
+  const jsonLd = origin && !options.preview
+    ? articleJsonLd(metadata, {
+        url: canonicalUrl,
+        imageUrl: metadata.thumbnail_url,
+      })
+    : null;
 
-  return pageShell(metadata.title, `
+  return pageShell(seoTitle, `
     <main class="site-shell article-shell">
       <p><a href="${options.preview ? "/admin" : "/site"}">← 戻る</a></p>
       ${options.preview ? '<p class="preview-banner">Preview</p>' : ""}
@@ -1675,7 +3043,82 @@ function renderArticlePage(article, options = {}) {
         ${productLink ? `<p class="cta"><a href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer">作品ページを確認する</a></p>` : ""}
       </article>
     </main>
-  `);
+  `, {
+    description,
+    canonicalUrl,
+    imageUrl: metadata.thumbnail_url,
+    jsonLd,
+    ogType: "article",
+    robots: options.preview ? "noindex,nofollow,noarchive" : "index,follow,max-image-preview:large",
+  });
+}
+
+function articleSeoDescription(metadata = {}) {
+  const details = [];
+  if (metadata.circle_name) details.push(`サークル: ${metadata.circle_name}`);
+  if (metadata.author_name) details.push(`作者: ${metadata.author_name}`);
+  if ((metadata.genres || []).length) details.push(`ジャンル: ${(metadata.genres || []).slice(0, 6).join("、")}`);
+  const excerpt = String(metadata.excerpt || "").trim();
+  const prefix = `${metadata.title || metadata.product_title || "同人作品"}のレビュー・試し読み情報。`;
+  return truncateText(`${prefix}${details.join(" / ")}${details.length ? "。 " : ""}${excerpt}`, 155);
+}
+
+function articleJsonLd(metadata = {}, options = {}) {
+  const url = options.url || "";
+  const imageUrl = options.imageUrl || metadata.thumbnail_url || "";
+  const about = [
+    metadata.circle_name,
+    metadata.author_name,
+    ...(metadata.genres || []),
+  ].filter(Boolean);
+  const data = {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    mainEntityOfPage: {
+      "@type": "WebPage",
+      "@id": url,
+    },
+    headline: metadata.title || metadata.product_title || "",
+    description: articleSeoDescription(metadata),
+    datePublished: metadata.published_at || metadata.updated_at || undefined,
+    dateModified: metadata.updated_at || metadata.published_at || undefined,
+    author: {
+      "@type": "Organization",
+      name: SITE_OPERATOR_NAME,
+    },
+    publisher: {
+      "@type": "Organization",
+      name: SITE_NAME,
+    },
+    isAccessibleForFree: true,
+  };
+  if (imageUrl) data.image = [imageUrl];
+  if (about.length) data.about = about.map((name) => ({ "@type": "Thing", name }));
+  return data;
+}
+
+function collectionJsonLd(options = {}) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    name: options.title || SITE_NAME,
+    description: options.description || "",
+    url: options.url || "",
+    isPartOf: {
+      "@type": "WebSite",
+      name: SITE_NAME,
+      url: absoluteSiteUrl(options.origin || "", "/site"),
+    },
+    mainEntity: {
+      "@type": "ItemList",
+      itemListElement: (options.articles || []).map((article, index) => ({
+        "@type": "ListItem",
+        position: index + 1,
+        url: absoluteSiteUrl(options.origin || "", `/site/posts/${encodeURIComponent(article.slug)}`),
+        name: article.title,
+      })),
+    },
+  };
 }
 
 function renderSampleCarousel(article, productLink = "", variant = "") {
@@ -1777,9 +3220,13 @@ function insertWorkCommentSection(markdown, comment) {
   return lines.join("\n");
 }
 
-function renderCountSummary(visibleCount, totalCount, filters) {
+function renderCountSummary(visibleCount, totalCount, filters, pagination = {}) {
   const hasFilters = hasActiveFilters(filters);
-  return `<p class="site-count">現在の作品数 <strong>${formatCount(totalCount)}</strong>件${hasFilters ? ` / 表示中 <strong>${formatCount(visibleCount)}</strong>件` : ""}</p>`;
+  const matchedText = hasFilters
+    ? ` / 条件一致 <strong>${formatCount(pagination.matchedCount || 0)}</strong>件`
+    : "";
+  const pageText = ` / ${formatCount(pagination.page || 1)}ページ目`;
+  return `<p class="site-count">現在の作品数 <strong>${formatCount(totalCount)}</strong>件${matchedText} / 表示中 <strong>${formatCount(visibleCount)}</strong>件${pageText}</p>`;
 }
 
 function hasActiveFilters(filters = {}) {
@@ -1793,6 +3240,12 @@ function hasActiveFilters(filters = {}) {
 
 function formatCount(value) {
   return Number(value || 0).toLocaleString("ja-JP");
+}
+
+function truncateText(value, maxLength = 155) {
+  const text = String(value || "").replace(/\s+/gu, " ").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
 function renderWorkComment(value) {
@@ -1838,25 +3291,59 @@ function productPageUrl(metadata) {
   return String(metadata.affiliate_url || metadata.source_url || "").trim();
 }
 
+function absoluteSiteUrl(origin, path) {
+  if (!origin) return String(path || "");
+  try {
+    return new URL(path || "/", origin).href;
+  } catch {
+    return `${String(origin).replace(/\/$/u, "")}/${String(path || "").replace(/^\//u, "")}`;
+  }
+}
+
 function siteFilterUrl(params = {}) {
   const search = new URLSearchParams();
   for (const key of ["q", "circle", "author"]) {
     if (params[key]) search.set(key, params[key]);
   }
-  for (const genre of normalizeFilterValues(params.genres ?? params.genre)) {
+  for (const genre of normalizeFilterValues(params.genres ?? params.genre).slice(0, SITE_MAX_GENRE_FILTERS)) {
     search.append("genre", genre);
   }
+  const page = positiveInteger(params.page, 1);
+  if (page > 1) search.set("page", String(page));
   const query = search.toString();
   return query ? `/site?${query}` : "/site";
+}
+
+function renderPagination({ filters, page, pageCount, totalCount, pageSize }) {
+  if (totalCount <= pageSize && pageCount <= 1) return "";
+
+  const start = totalCount ? (page - 1) * pageSize + 1 : 0;
+  const end = Math.min(page * pageSize, totalCount);
+  const prevHref = page > 1 ? siteFilterUrl({ ...filters, page: page - 1 }) : "";
+  const nextHref = page < pageCount ? siteFilterUrl({ ...filters, page: page + 1 }) : "";
+
+  return `
+          <nav class="pagination" aria-label="作品一覧ページ">
+            <p>${formatCount(start)}-${formatCount(end)} / ${formatCount(totalCount)}件</p>
+            <div class="pagination-actions">
+              ${prevHref ? `<a href="${prevHref}" rel="prev">前の20件</a>` : '<span aria-disabled="true">前の20件</span>'}
+              <span>${formatCount(page)} / ${formatCount(pageCount)}</span>
+              ${nextHref ? `<a href="${nextHref}" rel="next">次の20件</a>` : '<span aria-disabled="true">次の20件</span>'}
+            </div>
+          </nav>
+  `;
 }
 
 function renderGenreTags(genres, filters = {}) {
   return [...genres].map((genre) => renderGenreFilterLink(genre, filters)).join("");
 }
 
-function renderGenreFilterLink(genre, filters = {}) {
+function renderGenreFilterLink(genre, filters = {}, count = 0) {
   const selectedGenres = filters.genres || [];
   const active = selectedGenres.includes(genre);
+  if (!active && selectedGenres.length >= SITE_MAX_GENRE_FILTERS) {
+    return `<span class="filter-disabled" title="ジャンルは最大${SITE_MAX_GENRE_FILTERS}件まで指定できます">${escapeHtml(genre)}</span>`;
+  }
   const nextGenres = active
     ? selectedGenres.filter((selected) => selected !== genre)
     : [...selectedGenres, genre];
@@ -1866,7 +3353,8 @@ function renderGenreFilterLink(genre, filters = {}) {
     author: filters.author,
     genres: nextGenres,
   });
-  return `<a class="${active ? "active" : ""}" href="${href}">${escapeHtml(genre)}</a>`;
+  const title = count ? ` title="${formatCount(count)}件"` : "";
+  return `<a class="${active ? "active" : ""}" href="${href}"${title}>${escapeHtml(genre)}</a>`;
 }
 
 function renderPlainTags(tags) {
@@ -2016,14 +3504,32 @@ function inlineMarkdown(value, options = {}) {
     .replace(/`([^`]+)`/gu, "<code>$1</code>");
 }
 
-function pageShell(title, body) {
+function pageShell(title, body, options = {}) {
+  const description = truncateText(options.description || `${SITE_NAME}は大人向け同人誌・エロ漫画の作品情報、ジャンル、サークル、試し読み確認ポイントを整理する紹介サイトです。`, 155);
+  const canonicalUrl = String(options.canonicalUrl || "").trim();
+  const imageUrl = String(options.imageUrl || "").trim();
+  const robots = String(options.robots || "index,follow,max-image-preview:large").trim();
+  const ogType = String(options.ogType || "website").trim();
+  const jsonLd = options.jsonLd ? `<script type="application/ld+json">${jsonForScript(options.jsonLd)}</script>` : "";
   return `<!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(title)}</title>
+  <meta name="description" content="${escapeHtml(description)}">
+  <meta name="robots" content="${escapeHtml(robots)}">
+  <meta name="rating" content="adult">
+  ${canonicalUrl ? `<link rel="canonical" href="${escapeHtml(canonicalUrl)}">` : ""}
+  <meta property="og:site_name" content="${escapeHtml(SITE_NAME)}">
+  <meta property="og:type" content="${escapeHtml(ogType)}">
+  <meta property="og:title" content="${escapeHtml(title)}">
+  <meta property="og:description" content="${escapeHtml(description)}">
+  ${canonicalUrl ? `<meta property="og:url" content="${escapeHtml(canonicalUrl)}">` : ""}
+  ${imageUrl ? `<meta property="og:image" content="${escapeHtml(imageUrl)}">` : ""}
+  <meta name="twitter:card" content="${imageUrl ? "summary_large_image" : "summary"}">
   <link rel="stylesheet" href="/admin.css">
+  ${jsonLd}
 </head>
 <body class="site-preview">
 ${body}
@@ -2048,6 +3554,33 @@ function siteFooter() {
 </footer>`;
 }
 
+async function cachedPublicResponse(cacheUrl, ctx, createResponse) {
+  if (typeof caches === "undefined" || !caches.default) {
+    return createResponse();
+  }
+
+  const cacheKey = new Request(cacheUrl, { method: "GET" });
+  const cached = await caches.default.match(cacheKey);
+  if (cached) return cached;
+
+  const response = await createResponse();
+  if (response.ok) {
+    const cacheWrite = caches.default.put(cacheKey, response.clone()).catch((error) => {
+      console.warn(JSON.stringify({ level: "warn", message: "cache write failed", error: error.message }));
+    });
+    if (ctx?.waitUntil) {
+      ctx.waitUntil(cacheWrite);
+    } else {
+      await cacheWrite;
+    }
+  }
+  return response;
+}
+
+function publicCacheControl(seconds) {
+  return `public, max-age=${seconds}, stale-while-revalidate=${Math.max(seconds, 86400)}`;
+}
+
 function sendJson(payload, status = 200) {
   return new Response(JSON.stringify(payload, null, 2), {
     status,
@@ -2058,12 +3591,32 @@ function sendJson(payload, status = 200) {
   });
 }
 
-function sendHtml(html, status = 200) {
+function sendPublicJson(payload, cacheSeconds) {
+  return new Response(JSON.stringify(payload), {
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": publicCacheControl(cacheSeconds),
+      "X-Robots-Tag": "noindex",
+    },
+  });
+}
+
+function sendHtml(html, status = 200, cacheControl = "no-store") {
   return new Response(html, {
     status,
     headers: {
       "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
+      "Cache-Control": cacheControl,
+    },
+  });
+}
+
+function sendXml(xml, status = 200) {
+  return new Response(xml, {
+    status,
+    headers: {
+      "Content-Type": "application/xml; charset=utf-8",
+      "Cache-Control": "public, max-age=3600",
     },
   });
 }
@@ -2151,6 +3704,14 @@ function positiveInteger(value, fallback) {
   return Number.isInteger(number) && number > 0 ? number : Number(fallback) || DEFAULT_RANKING_LIMIT;
 }
 
+function boundedPositiveInteger(value, fallback, max) {
+  const number = Number(value);
+  const fallbackNumber = Number(fallback);
+  const resolved = Number.isInteger(number) && number > 0 ? number : fallbackNumber;
+  const safeValue = Number.isInteger(resolved) && resolved > 0 ? resolved : 1;
+  return Math.min(safeValue, max);
+}
+
 function boundedNonNegativeInteger(value, fallback, max) {
   const fallbackNumber = Number(fallback);
   const number = Number(value);
@@ -2179,6 +3740,15 @@ function escapeHtml(value) {
     .replace(/>/gu, "&gt;")
     .replace(/"/gu, "&quot;")
     .replace(/'/gu, "&#039;");
+}
+
+function escapeXml(value) {
+  return String(value ?? "")
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;")
+    .replace(/'/gu, "&apos;");
 }
 
 function escapeBreakableText(value) {

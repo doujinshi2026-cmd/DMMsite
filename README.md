@@ -2,7 +2,7 @@
 
 成人向け同人作品のレビュー記事を、まずは手動で増やしていくためのサイト基盤です。
 
-現在の主導線は、自動投稿ではなくブログ記事の作成です。記事は `content/posts/*.md` に保存し、画像は `public/uploads/` に保存します。この形式にしておくことで、後からDMM API取得、AI下書き生成、SNS投稿botなどを同じ記事データへ接続できます。
+本番の記事データはCloudflare D1に保存します。`content/posts/*.md` は初回移行やローカル確認用のデータで、Git管理には含めません。
 
 ## 記事を書く
 
@@ -71,7 +71,9 @@ http://127.0.0.1:4173/site?genre=制服&genre=巨乳
 http://127.0.0.1:4173/site?circle=どじろーブックス&author=どじろー
 ```
 
-ジャンルは複数選択できます。ジャンルチップをクリックすると選択に追加され、選択済みジャンルをクリックすると解除されます。複数ジャンルを選ぶと、すべてのジャンルを持つ作品だけに絞り込まれます。
+ジャンルは最大5件まで複数選択できます。ジャンルチップをクリックすると選択に追加され、選択済みジャンルをクリックすると解除されます。複数ジャンルを選ぶと、すべてのジャンルを持つ作品だけに絞り込まれます。
+
+公開WorkerではD1側で絞り込み・件数計算・20件単位のページ取得を行います。検索候補は入力時に `/site/suggestions.json` から遅延取得し、一覧HTMLは5分、候補JSONは1時間エッジキャッシュします。過剰なジャンル指定、長すぎる検索条件、存在しないページ番号は安全なURLへ正規化されます。
 
 記事本文に埋め込んだ画像は、`affiliate_url` があればそれを優先し、未設定の場合は `source_url` へ遷移します。
 
@@ -86,7 +88,7 @@ Blog CMSで記事の `今週のおすすめ` を有効にすると、通常の `
 ## 保存先
 
 ```text
-content/posts/          記事Markdown
+content/posts/          ローカル記事Markdown（Git管理外）
 public/uploads/         アップロード画像
 tools/blog-admin/       管理画面
 scripts/blog-admin.mjs  ローカル管理サーバー
@@ -95,10 +97,10 @@ database/d1-schema.sql  Cloudflare D1用の記事テーブル
 src/worker.js           Cloudflare Workers用の公開サイト/API/Cron
 ```
 
-## DMMランキング取り込み
+## DMM API取り込み
 
-24時間人気ランキングをページ送り込みで上位100件まで候補として確認し、未投稿の作品はレビュー記事として追加し、既存記事の抜粋が空なら作品コメントで補完できます。
-制限対策として、Cloudflare本番では作品詳細ページの取得を1回あたり最大40件に抑え、詳細ページ同士のリクエスト間に750msの待機を入れています。
+DMM Webサービスの商品情報API `ItemList` から、FANZA同人の商品データを取得してD1の記事として追加します。
+標準では `service=doujin` / `floor=digital_doujin` を使い、ゲームやCG集を混ぜないよう `media=comic` で同人コミックだけを取り込みます。
 
 本番の作品数を増やす標準ルートはCloudflare WorkerのD1更新です。`content/posts/*.md` を増やしてデプロイする運用ではありません。
 
@@ -106,12 +108,14 @@ src/worker.js           Cloudflare Workers用の公開サイト/API/Cron
 npm run works:update
 ```
 
-`works:update` はデプロイ済みWorkerの `/api/dmm/import` をBasic認証付きで呼びます。ローカルの `.env` に次を入れてください。
+`works:update` はデプロイ済みWorkerの `/api/dmm/import` をBasic認証付きで呼びます。ローカルの `.env` に次を入れてください。DMMの `DMM_API_ID` とAPI取得用の `DMM_AFFILIATE_ID` はCloudflare Worker Secretにも登録しておきます。サイトに掲載するリンクのIDは `DMM_LINK_AFFILIATE_ID` で分けて指定します。
 
 ```text
 CLOUDFLARE_WORKER_URL=https://dmmsite.doujinshi2026.workers.dev
 BLOG_CMS_USER=admin
 BLOG_CMS_PASSWORD=CloudflareにSecret登録したパスワード
+DMM_AFFILIATE_ID=商品情報API用登録のID（例: 末尾990）
+DMM_LINK_AFFILIATE_ID=承認済みサイト用のID（例: 末尾003）
 ```
 
 動作確認だけ行い、D1を書き換えない場合は次を使います。
@@ -122,55 +126,46 @@ npm run works:update:dry
 
 取り込み内容:
 
-- 対象URL: `https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=sales/term=h24/`
-- 対象順位: ページ送り込みで上位100件まで候補として確認
-- 詳細取得: 未取得・情報不足の作品を1回あたり最大40件
-- 待機時間: 作品詳細ページの取得ごとに750ms
-- 重複判定: `cid=d_...`、slug、元ページURL、作品名
+- API: `https://api.dmm.com/affiliate/v3/ItemList`
+- 標準条件: `site=FANZA` / `service=doujin` / `floor=digital_doujin` / `media=comic`
+- sort: `rank`、`date`、`review`、`price`、`-price`、`match`
+- 取得件数: 1回あたり最大100件。さらに増やす場合は `--offset` を変えて複数回実行
+- 重複判定: `content_id`、slug、元ページURL、アフィリエイトURL、作品名
 - 状態: `published`
 - 種類: `review`
 - 公開日: 取り込み実行時刻
-- タイトル、slug、作品名: ランキングの `.rank-name`
-- サークル名: ランキングの `.rank-circle`
-- ジャンル: 作品ページの `.c_icon_detailGenreTag`
-- 抜粋: 作品ページの「作品コメント」内の `.summary__txt`
-- サムネイルURL: 作品ページ内の `doujin-assets.dmm.co.jp` のPR画像
-- 試し読み画像URL: 作品ページ内の `.productPreview` に含まれるPR画像とサンプル画像
-- 元ページURL、広告URL: 作品ページへ遷移した後のURL
-- 作者名、本文: 空欄
+- タイトル、slug、作品名: APIの `title`
+- サークル名: APIの `iteminfo.maker`
+- 作者名: APIの `iteminfo.author`
+- ジャンル: APIの `iteminfo.genre`
+- 抜粋: APIの商品データから生成した短い基本情報
+- サムネイルURL: APIの `imageURL.large` または `imageURL.list`
+- 試し読み画像URL: APIの `sampleImageURL`
+- 元ページURL、広告URL: APIの `URL` / `affiliateURL`
 
-現在の取得方法は、DMM/FANZAのHTMLページを `fetch` で取得し、ランキング名・サークル名・作品コメント・ジャンル・サムネイルURLなどをHTMLから読み取る方式です。
-これは公式APIではなく、技術的にはWebスクレイピングに分類されます。画像ファイル自体は保存せず、商品ページ内の画像URLを記事データに保存しています。
-
-ローカルのMarkdownへ取り込む旧ルートは、ローカル表示確認や初期データ作成用です。本番D1の作品数は増えません。
+よく使う取り込み例:
 
 ```powershell
-npm run dmm:import
-npm run dmm:import:dry
+npm run works:update:dry -- --sort rank --limit 100
+npm run works:update -- --sort rank --limit 100
+npm run works:update -- --sort date --limit 100 --offset 1
+npm run works:update -- --sort date --limit 100 --offset 101
+npm run works:update -- --sort review --limit 100 --offset 1
 ```
 
-Windowsで毎日00:00と12:00に実行する場合は、タスクスケジューラへ登録します。
+BL/TLのfloorを取得する場合:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\register-dmm-ranking-task.ps1
+npm run works:update -- --floor digital_doujin_bl --sort rank --limit 100
+npm run works:update -- --floor digital_doujin_tl --sort rank --limit 100
 ```
 
-ログは `logs/dmm-ranking-import.log` に追記されます。時刻を変える場合は次のように指定します。
+旧HTMLランキング取り込みは `npm run dmm:import:legacy` として残していますが、標準運用では使いません。
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\register-dmm-ranking-task.ps1 -At 12:00
-```
-
-一度に確認する候補数や詳細取得数を変える場合は、次のように指定できます。
-
-```powershell
-npm run works:update -- --limit 100 --detail-limit 40 --delay-ms 750
-```
-
-## Cloudflare Workersで00:00 / 12:00自動更新
+## Cloudflare WorkersでAPI自動更新
 
 本番運用では、ローカルPCのタスクスケジューラではなくCloudflare WorkersのCron Triggerで更新します。
-この構成では、公開サイト・管理画面・DMMランキング取り込みを1つのWorkerで動かし、記事データはD1に保存します。
+この構成では、公開サイト・管理画面・DMM API取り込みを1つのWorkerで動かし、記事データはD1に保存します。
 
 Cloudflare側の構成:
 
@@ -179,13 +174,21 @@ Cloudflare側の構成:
 - 公開サイト: `/site`
 - 管理画面: `/admin`
 - 手動取り込み: `npm run works:update` または `/api/dmm/import`
-- Cron: `0 15 * * *`, `0 3 * * *`
-- 候補件数: `DMM_RANKING_LIMIT=100`
-- 1回あたりの詳細取得上限: `DMM_RANKING_DETAIL_LIMIT=40`
-- 詳細取得の待機時間: `DMM_RANKING_REQUEST_DELAY_MS=750`
+- Cron: `10 22 * * *`, `10 3 * * *`, `10 12 * * *`, `10 15 * * *`
+- 候補件数: `DMM_API_IMPORT_LIMIT=100`
+- 対象メディア: `DMM_API_IMPORT_MEDIA=comic`
+- 対象floor: `DMM_API_IMPORT_FLOOR=digital_doujin`
 
-CloudflareのCronはUTC基準です。日本時間00:00は前日のUTC 15:00、日本時間12:00はUTC 03:00なので、`wrangler.jsonc` では `0 15 * * *` と `0 3 * * *` を設定しています。
-ランキングページはページ送り込みで上位100件まで候補として読みますが、各回で作品詳細ページを取得するのは未取得・情報不足の作品だけです。上限に達した分は次回以降へ回します。
+CloudflareのCronはUTC基準です。日本時間で次の4枠に分けて、同じ上位だけを繰り返さないように取得面を変えています。
+
+| 日本時間 | UTC Cron | 取得内容 |
+| --- | --- | --- |
+| 07:10 | `10 22 * * *` | 新着順 `sort=date` / offset 1 |
+| 12:10 | `10 3 * * *` | 人気順 `sort=rank` / offset 1 |
+| 21:10 | `10 12 * * *` | 人気順 `sort=rank` / offset 101 |
+| 00:10 | `10 15 * * *` | レビュー順 `sort=review` / offset 1 |
+
+Cronでも `/api/dmm/import` と同じ商品情報API取り込みを実行します。重複作品は作成せず、足りない画像やアフィリエイトURLだけ補完します。
 
 初回セットアップ:
 
@@ -228,6 +231,26 @@ npx wrangler d1 execute dmmsite-db --remote --file=database/d1-migration-editori
 https://<your-worker-domain>/api/dmm/backfill?dryRun=1&limit=40
 ```
 
+DMM/FANZAアフィリエイト承認後に通常の商品URLを公式APIのアフィリエイトリンクへ切り替える手順は次にまとめています。
+
+```text
+manual/2026-06-05_dmm-affiliate-link-switch.md
+```
+
+ローカルMarkdown記事を確認・更新する場合:
+
+```powershell
+npm run dmm:affiliate:dry
+npm run dmm:affiliate
+```
+
+本番D1の記事を確認・更新する場合:
+
+```powershell
+npm run cf:dmm:affiliate:dry
+npm run cf:dmm:affiliate
+```
+
 既存の `content/posts/*.md` をD1へ移す場合だけ、seed SQLを生成して流し込みます。これは初回移行用で、日々の作品追加はWorkerのCronと `npm run works:update` がD1へ直接書き込みます。
 
 ```powershell
@@ -258,12 +281,13 @@ http://localhost:8787/api/dmm/import?dryRun=1
 取得件数を抑えて確認する場合:
 
 ```text
-http://localhost:8787/api/dmm/import?dryRun=1&limit=100&detailLimit=10&delayMs=750
+http://localhost:8787/api/dmm/import?dryRun=1&sort=rank&limit=20&media=comic
 ```
 
 問題なければデプロイします。
 
 ```powershell
+npm run cf:d1:optimize:remote
 npm run cf:deploy
 ```
 
@@ -274,7 +298,7 @@ npm run cf:deploy
 - `npm run works:update:dry` で新規候補だけを確認
 - `npm run works:update` でD1へ手動取り込み
 - Cloudflare Dashboard の Workers & Pages > `dmmsite` > Settings > Triggers でCronを確認
-- Workers Logsで `dmm-ranking-import` のログを確認
+- Workers Logsで `dmm-api-import` のログを確認
 
 ## 運用方針
 

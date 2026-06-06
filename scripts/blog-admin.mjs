@@ -20,6 +20,7 @@ const __dirname = path.dirname(__filename);
 const ADMIN_DIR = path.join(PROJECT_ROOT, "tools", "blog-admin");
 const DEFAULT_PORT = 4173;
 const MAX_JSON_BYTES = 14 * 1024 * 1024;
+const SITE_MAX_GENRE_FILTERS = 5;
 
 await loadDotEnv(path.join(PROJECT_ROOT, ".env"));
 
@@ -151,7 +152,7 @@ async function route(request, response) {
       q: String(url.searchParams.get("q") || "").trim(),
       circle: String(url.searchParams.get("circle") || "").trim(),
       author: String(url.searchParams.get("author") || "").trim(),
-      genres: normalizeFilterValues(url.searchParams.getAll("genre")),
+      genres: normalizeFilterValues(url.searchParams.getAll("genre")).slice(0, SITE_MAX_GENRE_FILTERS),
     };
     const articles = sortArticlesByUpdatedAt(allArticles.filter((article) => articleMatchesFilters(article, filters)));
     return sendHtml(response, renderSiteIndex(articles, { allArticles, filters }));
@@ -398,41 +399,46 @@ function renderSiteIndex(articles, context = {}) {
       ${renderWeeklyPickSection(weeklyPicks)}
       <div class="catalog-layout">
         <aside class="filter-panel">
-          <form method="get" action="/site" class="filter-form">
-            <label>
-              <span>キーワード</span>
-              <input name="q" value="${escapeHtml(filters.q || "")}" placeholder="タイトル、サークル、作者、タグ">
-            </label>
-            <label>
-              <span>サークル</span>
-              <input name="circle" value="${escapeHtml(filters.circle || "")}" placeholder="例: どじろーブックス">
-            </label>
-            <label>
-              <span>作者</span>
-              <input name="author" value="${escapeHtml(filters.author || "")}" placeholder="例: どじろー">
-            </label>
-            <label>
-              <span>ジャンル</span>
-              <input name="genre" value="${escapeHtml((filters.genres || []).join(" "))}" placeholder="例: 制服 巨乳">
-            </label>
-            <button type="submit">検索</button>
-            <a class="ghost-link" href="/site">解除</a>
-          </form>
-          ${activeLabel ? `<div class="active-filter">${activeLabel}</div>` : ""}
-          <div class="filter-links">
-            <section>
-              <h2>サークル</h2>
-              <div class="tags filter-tags">${circles.map((circle) => `<a href="${siteFilterUrl({ q: filters.q, circle, author: filters.author, genres: filters.genres })}">${escapeHtml(circle)}</a>`).join("") || "<span>未登録</span>"}</div>
-            </section>
-            <section>
-              <h2>作者</h2>
-              <div class="tags filter-tags">${authors.map((author) => `<a href="${siteFilterUrl({ q: filters.q, circle: filters.circle, author, genres: filters.genres })}">${escapeHtml(author)}</a>`).join("") || "<span>未登録</span>"}</div>
-            </section>
-            <section>
-              <h2>ジャンル</h2>
-              <div class="tags filter-tags">${genres.map((genre) => renderGenreFilterLink(genre, filters)).join("") || "<span>未登録</span>"}</div>
-            </section>
-          </div>
+          <details class="filter-disclosure" data-filter-disclosure>
+            <summary>作品を絞り込む${hasActiveFilters(filters) ? "（条件指定中）" : ""}</summary>
+            <div class="filter-disclosure-body">
+              <form method="get" action="/site" class="filter-form">
+                <label>
+                  <span>キーワード</span>
+                  <input name="q" value="${escapeHtml(filters.q || "")}" placeholder="タイトル、サークル、作者、タグ">
+                </label>
+                <label>
+                  <span>サークル</span>
+                  <input name="circle" value="${escapeHtml(filters.circle || "")}" placeholder="例: どじろーブックス">
+                </label>
+                <label>
+                  <span>作者</span>
+                  <input name="author" value="${escapeHtml(filters.author || "")}" placeholder="例: どじろー">
+                </label>
+                <label>
+                  <span>ジャンル</span>
+                  <input name="genre" value="${escapeHtml((filters.genres || []).join(" "))}" placeholder="最大5件: 制服 巨乳">
+                </label>
+                <button type="submit">検索</button>
+                <a class="ghost-link" href="/site">解除</a>
+              </form>
+              ${activeLabel ? `<div class="active-filter">${activeLabel}</div>` : ""}
+              <div class="filter-links">
+                <section>
+                  <h2>サークル</h2>
+                  <div class="tags filter-tags">${circles.map((circle) => `<a href="${siteFilterUrl({ q: filters.q, circle, author: filters.author, genres: filters.genres })}">${escapeHtml(circle)}</a>`).join("") || "<span>未登録</span>"}</div>
+                </section>
+                <section>
+                  <h2>作者</h2>
+                  <div class="tags filter-tags">${authors.map((author) => `<a href="${siteFilterUrl({ q: filters.q, circle: filters.circle, author, genres: filters.genres })}">${escapeHtml(author)}</a>`).join("") || "<span>未登録</span>"}</div>
+                </section>
+                <section>
+                  <h2>ジャンル</h2>
+                  <div class="tags filter-tags">${genres.map((genre) => renderGenreFilterLink(genre, filters)).join("") || "<span>未登録</span>"}</div>
+                </section>
+              </div>
+            </div>
+          </details>
         </aside>
         <section class="post-grid">${cards || "<p>記事はまだありません。</p>"}</section>
       </div>
@@ -684,7 +690,7 @@ function siteFilterUrl(params = {}) {
   for (const key of ["q", "circle", "author"]) {
     if (params[key]) search.set(key, params[key]);
   }
-  for (const genre of normalizeFilterValues(params.genres ?? params.genre)) {
+  for (const genre of normalizeFilterValues(params.genres ?? params.genre).slice(0, SITE_MAX_GENRE_FILTERS)) {
     search.append("genre", genre);
   }
   const query = search.toString();
@@ -702,6 +708,9 @@ function renderGenreTags(genres, filters = {}) {
 function renderGenreFilterLink(genre, filters = {}) {
   const selectedGenres = filters.genres || [];
   const active = selectedGenres.includes(genre);
+  if (!active && selectedGenres.length >= SITE_MAX_GENRE_FILTERS) {
+    return `<span class="filter-disabled" title="ジャンルは最大${SITE_MAX_GENRE_FILTERS}件まで指定できます">${escapeHtml(genre)}</span>`;
+  }
   const nextGenres = active
     ? selectedGenres.filter((selected) => selected !== genre)
     : [...selectedGenres, genre];

@@ -43,5 +43,8 @@ CREATE INDEX IF NOT EXISTS idx_articles_published_at
 CREATE INDEX IF NOT EXISTS idx_articles_circle_name
   ON articles(circle_name);
 
+CREATE INDEX IF NOT EXISTS idx_articles_status_circle_author
+  ON articles(status, circle_name, author_name);
+
 CREATE INDEX IF NOT EXISTS idx_articles_weekly_pick
   ON articles(weekly_pick, weekly_pick_order);

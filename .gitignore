@@ -13,6 +13,12 @@ database/d1-seed.sql
 logs/*
 !logs/.gitkeep
 
+# Local article data and Cloudflare development state.
+# Production article data is stored in Cloudflare D1.
+content/posts/
+.wrangler/
+.wrangler-config/
+
 # Local planning and operation notes. Keep these on this machine only.
 doc/
 manual/
