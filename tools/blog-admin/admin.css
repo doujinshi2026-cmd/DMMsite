@@ -933,6 +933,8 @@ textarea:focus {
   background: #fff;
   border: 1px solid #d8d2cc;
   border-radius: 10px;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   overflow: hidden;
 }
@@ -968,6 +970,9 @@ textarea:focus {
 }
 
 .ranking-card-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   padding: 11px;
 }
 
@@ -985,7 +990,8 @@ textarea:focus {
 .ranking-actions {
   display: grid;
   gap: 7px;
-  margin-top: 10px;
+  margin-top: auto;
+  padding-top: 10px;
 }
 
 .secondary-action,
@@ -1541,7 +1547,6 @@ textarea:focus {
   text-align: center;
 }
 
-.affiliate-cta-label,
 .affiliate-cta-note {
   color: #5d5143;
   font-size: 12px;

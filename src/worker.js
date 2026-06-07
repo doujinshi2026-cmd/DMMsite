@@ -3418,7 +3418,7 @@ function renderSiteIndex(articles, context = {}) {
         ${breadcrumb}
         <nav class="primary-site-nav" aria-label="主要ページ">
           <a href="/site">作品一覧</a>
-          <a href="/site/ranking">人気作品TOP100</a>
+          <a href="/site/ranking">作品ランキング</a>
           <a href="/site/policy">運営情報</a>
         </nav>
       </header>
@@ -3502,7 +3502,7 @@ function renderDailyRankingSection(articles) {
             <p>DMM API人気順 / 24時間ごとに更新${updatedAt ? ` / ${escapeHtml(updatedAt)}時点` : ""}</p>
             <h2 id="daily-ranking-heading">今人気の作品 TOP${articles.length}</h2>
           </div>
-          <a class="section-more-link" href="/site/ranking">TOP100をすべて見る</a>
+          <a class="section-more-link" href="/site/ranking">ランキングをすべて見る</a>
         </div>
         <div class="ranking-grid">
           ${articles.map((article) => renderRankingCard(article)).join("")}
@@ -3517,9 +3517,9 @@ function renderRankingPage(articles, options = {}) {
     ? formatJstDateTime(articles[0].selection_observed_at)
     : "";
   const canonicalUrl = origin ? absoluteSiteUrl(origin, "/site/ranking") : "";
-  const title = `24時間ごと更新 人気同人誌・エロ漫画TOP${articles.length}`;
+  const title = "同人誌・エロ漫画ランキング";
   const description = truncateText(
-    `DMM WebサービスAPIの人気順をもとに、コミック上位${articles.length}作品を24時間ごとに更新しています。サンプル画像、サークル、ジャンルから気になる作品を探せます。`,
+    `DMMの人気順をもとに作品を掲載しています。サンプル画像、サークル、ジャンルから気になる作品を探せます。`,
     155
   );
   const jsonLd = origin
@@ -3537,10 +3537,10 @@ function renderRankingPage(articles, options = {}) {
       <header class="site-header">
         <p>18歳未満閲覧禁止 / 当サイトはアフィリエイト広告を利用しています</p>
         <h1>${escapeHtml(title)}</h1>
-        <p class="ranking-lead">DMM APIの人気順をもとに掲載しています。${updatedAt ? `最終更新: ${escapeHtml(updatedAt)}` : ""}</p>
+        <p class="ranking-lead">DMMの人気順をもとに掲載しています。${updatedAt ? `最終更新: ${escapeHtml(updatedAt)}` : ""}</p>
         <nav class="primary-site-nav" aria-label="主要ページ">
           <a href="/site">作品一覧</a>
-          <a href="/site/ranking" aria-current="page">人気作品TOP100</a>
+          <a href="/site/ranking" aria-current="page">作品ランキング</a>
           <a href="/site/policy">運営情報</a>
         </nav>
       </header>
@@ -3573,7 +3573,7 @@ function renderRankingCard(article) {
               <a class="secondary-action" href="${articleLink}">作品紹介を見る</a>
               ${productLink ? affiliateLink(article, {
                 className: "affiliate-action",
-                label: "FANZAで確認",
+                label: "商品を見る",
                 placement: "ranking_card",
                 variant: "rank",
               }) : ""}
@@ -3786,7 +3786,7 @@ function renderWeeklyPickCard(article) {
                   <a class="secondary-action" href="${articleLink}">作品紹介を見る</a>
                   ${productLink ? affiliateLink(article, {
                     className: "pick-cta",
-                    label: "FANZAでサンプル・価格を見る",
+                    label: "商品を見る",
                     placement: "weekly_pick",
                     variant: "cta",
                   }) : ""}
@@ -4130,28 +4130,18 @@ function affiliateLink(metadata, options = {}) {
   const href = productPageUrl(metadata);
   if (!href) return "";
   const className = String(options.className || "affiliate-action").trim();
-  const label = String(options.label || "FANZAで確認する").trim();
+  const label = String(options.label || "商品を見る").trim();
   return `<a class="${escapeHtml(className)}" href="${escapeHtml(href)}" target="_blank" rel="sponsored noopener noreferrer"${affiliateTrackingAttributes(metadata, options)}>${escapeHtml(label)}</a>`;
 }
 
-function articleCtaVariant(metadata) {
-  const source = String(metadata?.product_id || metadata?.slug || "");
-  const bucket = [...source].reduce((total, character) => total + character.codePointAt(0), 0) % 2;
-  return bucket === 0
-    ? { key: "a", label: "FANZAでサンプル・価格を見る" }
-    : { key: "b", label: "この作品をFANZAで確認する" };
-}
-
 function renderArticleAffiliateCta(metadata, placement) {
-  const variant = articleCtaVariant(metadata);
   return `
         <aside class="affiliate-cta-box" aria-label="商品ページへの案内">
-          <p class="affiliate-cta-label">PR / 外部サイトへ移動します</p>
           ${affiliateLink(metadata, {
             className: "affiliate-cta-button",
-            label: variant.label,
+            label: "商品を見る",
             placement,
-            variant: variant.key,
+            variant: "product",
           })}
           <p class="affiliate-cta-note">価格・販売状況・対応環境はリンク先で確認してください。</p>
         </aside>
@@ -4412,7 +4402,7 @@ function siteFooter() {
   <div class="site-footer-inner">
     <nav class="footer-links" aria-label="サイト情報">
       <a href="/site">作品一覧</a>
-      <a href="/site/ranking">人気作品TOP100</a>
+      <a href="/site/ranking">作品ランキング</a>
       <a href="/site/policy">運営情報・サイトポリシー</a>
       <a href="/site/contact">お問い合わせ</a>
     </nav>
