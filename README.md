@@ -100,6 +100,7 @@ src/worker.js           Cloudflare Workers用の公開サイト/API/Cron
 ## DMM API取り込み
 
 DMM Webサービスの商品情報API `ItemList` から、FANZA同人の商品データを取得してD1の記事として追加します。
+作品情報の取得にHTMLスクレイピングは使用しません。
 標準では `service=doujin` / `floor=digital_doujin` を使い、ゲームやCG集を混ぜないよう `media=comic` で同人コミックだけを取り込みます。
 
 本番の作品数を増やす標準ルートはCloudflare WorkerのD1更新です。`content/posts/*.md` を増やしてデプロイする運用ではありません。
@@ -160,7 +161,32 @@ npm run works:update -- --floor digital_doujin_bl --sort rank --limit 100
 npm run works:update -- --floor digital_doujin_tl --sort rank --limit 100
 ```
 
-旧HTMLランキング取り込みは `npm run dmm:import:legacy` として残していますが、標準運用では使いません。
+## 作品の選定条件
+
+選定条件は `src/work-selection-policy.js` で一元管理します。
+
+- 初期掲載: 過去作品全体を含むDMM API `sort=rank` のコミック上位500作品
+- 定期更新: 24時間ごとに更新されるDMM API `sort=rank` のコミック上位100作品
+- 常時保持: `どじろーブックス`、`みずのウロ`、`ひやしまくら`
+- 注目作品: ItemList APIに識別項目がないため、別条件へ置き換えず未対応として明記
+
+初期同期と指定サークルの補完:
+
+```powershell
+npm run works:selection:sync
+```
+
+削除前の保持作品・削除候補一覧:
+
+```powershell
+npm run works:selection:plan
+```
+
+結果は `logs/work-selection-plan.json` に保存されます。削除は確認文字列を明示した場合だけ実行されます。
+
+```powershell
+npm run works:selection -- prune --confirm DELETE_UNSELECTED_WORKS
+```
 
 ## Cloudflare WorkersでAPI自動更新
 
@@ -174,21 +200,18 @@ Cloudflare側の構成:
 - 公開サイト: `/site`
 - 管理画面: `/admin`
 - 手動取り込み: `npm run works:update` または `/api/dmm/import`
-- Cron: `10 22 * * *`, `10 3 * * *`, `10 12 * * *`, `10 15 * * *`
+- Cron: `10 3 * * *`
 - 候補件数: `DMM_API_IMPORT_LIMIT=100`
 - 対象メディア: `DMM_API_IMPORT_MEDIA=comic`
 - 対象floor: `DMM_API_IMPORT_FLOOR=digital_doujin`
 
-CloudflareのCronはUTC基準です。日本時間で次の4枠に分けて、同じ上位だけを繰り返さないように取得面を変えています。
+CloudflareのCronはUTC基準です。定期更新は人気順上位100作品だけに限定します。
 
 | 日本時間 | UTC Cron | 取得内容 |
 | --- | --- | --- |
-| 07:10 | `10 22 * * *` | 新着順 `sort=date` / offset 1 |
-| 12:10 | `10 3 * * *` | 人気順 `sort=rank` / offset 1 |
-| 21:10 | `10 12 * * *` | 人気順 `sort=rank` / offset 101 |
-| 00:10 | `10 15 * * *` | レビュー順 `sort=review` / offset 1 |
+| 12:10 | `10 3 * * *` | 人気順 `sort=rank` / コミック上位100 |
 
-Cronでも `/api/dmm/import` と同じ商品情報API取り込みを実行します。重複作品は作成せず、足りない画像やアフィリエイトURLだけ補完します。
+Cronでも `/api/dmm/import` と同じ商品情報API取り込みを実行します。新着順・レビュー順は定期更新しません。
 
 初回セットアップ:
 

@@ -1,3 +1,10 @@
+import {
+  PROTECTED_MAKERS,
+  WORK_SELECTION_POLICY,
+  WORK_SELECTION_SOURCE_KEYS,
+  scheduledWorkSelection,
+} from "./work-selection-policy.js";
+
 const DEFAULT_RANKING_URL =
   "https://www.dmm.co.jp/dc/doujin/-/ranking-all/=/submedia=comic/sort=sales/term=h24/";
 const DEFAULT_RANKING_LIMIT = 100;
@@ -14,7 +21,7 @@ const DEFAULT_DMM_API_SORT = "rank";
 const DEFAULT_DMM_API_IMPORT_LIMIT = 50;
 const DEFAULT_DMM_API_IMPORT_HITS = 100;
 const DEFAULT_DMM_API_IMPORT_PAGE_LIMIT = 3;
-const MAX_DMM_API_IMPORT_LIMIT = 100;
+const MAX_DMM_API_IMPORT_LIMIT = 500;
 const MAX_DMM_API_IMPORT_HITS = 100;
 const MAX_DMM_API_IMPORT_PAGE_LIMIT = 10;
 const MAX_DMM_API_OFFSET = 50000;
@@ -39,44 +46,8 @@ const RIGHTS_VALUES = new Set(["pending_review", "approved_ad_material", "link_o
 const DMM_API_SORT_VALUES = new Set(["rank", "date", "review", "price", "-price", "match"]);
 const DMM_API_MEDIA_VALUES = new Set(["comic", "game", "cg", "voice", "all"]);
 const DMM_API_FLOOR_VALUES = new Set(["digital_doujin", "digital_doujin_bl", "digital_doujin_tl"]);
-const DMM_API_SCHEDULES = [
-  {
-    cron: "10 22 * * *",
-    label: "morning-new-comics",
-    jst: "07:10",
-    sort: "date",
-    offset: 1,
-    limit: 100,
-    media: "comic",
-  },
-  {
-    cron: "10 3 * * *",
-    label: "lunch-popular-comics",
-    jst: "12:10",
-    sort: "rank",
-    offset: 1,
-    limit: 100,
-    media: "comic",
-  },
-  {
-    cron: "10 12 * * *",
-    label: "night-popular-comics",
-    jst: "21:10",
-    sort: "rank",
-    offset: 101,
-    limit: 100,
-    media: "comic",
-  },
-  {
-    cron: "10 15 * * *",
-    label: "late-review-comics",
-    jst: "00:10",
-    sort: "review",
-    offset: 1,
-    limit: 100,
-    media: "comic",
-  },
-];
+const WORK_SELECTION_SOURCE_KEY_VALUES = new Set(Object.values(WORK_SELECTION_SOURCE_KEYS));
+const WORK_PRUNE_CONFIRMATION = "DELETE_UNSELECTED_WORKS";
 const ARTICLE_EDITORIAL_COLUMNS = [
   ["sample_images_json", "sample_images_json TEXT NOT NULL DEFAULT '[]'"],
   ["weekly_pick", "weekly_pick INTEGER NOT NULL DEFAULT 0"],
@@ -85,6 +56,7 @@ const ARTICLE_EDITORIAL_COLUMNS = [
 ];
 let articleEditorialColumnsReady = false;
 let contactMessagesTableReady = false;
+let workSelectionTablesReady = false;
 
 export default {
   async fetch(request, env, ctx) {
@@ -269,14 +241,18 @@ async function route(request, env, ctx) {
 }
 
 function scheduledDmmApiOptions(cron) {
-  const schedule = DMM_API_SCHEDULES.find((item) => item.cron === cron) || DMM_API_SCHEDULES[1];
+  const schedule = scheduledWorkSelection(cron);
   return {
     sort: schedule.sort,
     offset: schedule.offset,
     limit: schedule.limit,
+    hits: schedule.hits,
+    pageLimit: schedule.page_limit,
     media: schedule.media,
-    scheduleLabel: schedule.label,
-    scheduleJst: schedule.jst,
+    selectionSource: schedule.source_key,
+    replaceSelection: true,
+    scheduleLabel: schedule.schedule_label,
+    scheduleJst: schedule.schedule_jst,
   };
 }
 
@@ -330,6 +306,15 @@ async function routeApi(request, env, pathname, url) {
     const media = normalizeDmmApiMedia(url.searchParams.get("media") || env.DMM_API_IMPORT_MEDIA);
     const floor = normalizeDmmApiFloor(url.searchParams.get("floor") || env.DMM_API_IMPORT_FLOOR);
     const keyword = String(url.searchParams.get("keyword") || "").trim();
+    const exactMaker = String(
+      url.searchParams.get("exactMaker") || url.searchParams.get("exact_maker") || ""
+    ).trim();
+    const selectionSource = normalizeWorkSelectionSource(
+      url.searchParams.get("selectionSource") || url.searchParams.get("selection_source")
+    );
+    const replaceSelection =
+      url.searchParams.get("replaceSelection") === "1" ||
+      url.searchParams.get("replace_selection") === "1";
     const delayMs = boundedNonNegativeInteger(
       url.searchParams.get("delayMs") || url.searchParams.get("delay_ms"),
       env.DMM_API_REQUEST_DELAY_MS || 0,
@@ -345,6 +330,9 @@ async function routeApi(request, env, pathname, url) {
       media,
       floor,
       keyword,
+      exactMaker,
+      selectionSource,
+      replaceSelection,
       delayMs,
       manual: true,
     });
@@ -352,15 +340,25 @@ async function routeApi(request, env, pathname, url) {
   }
 
   if ((request.method === "GET" || request.method === "POST") && pathname === "/api/dmm/backfill") {
-    const dryRun = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dry_run") === "1";
-    const limit = positiveInteger(url.searchParams.get("limit"), env.DMM_RANKING_LIMIT);
-    const delayMs = boundedNonNegativeInteger(
-      url.searchParams.get("delayMs") || url.searchParams.get("delay_ms"),
-      env.DMM_RANKING_REQUEST_DELAY_MS || DEFAULT_REQUEST_DELAY_MS,
-      MAX_REQUEST_DELAY_MS
+    return sendJson(
+      { error: "HTML detail scraping is disabled. Use /api/dmm/import with the DMM API." },
+      410
     );
-    const result = await backfillDmmDetails(env, { dryRun, limit, delayMs });
-    return sendJson(result);
+  }
+
+  if (request.method === "GET" && pathname === "/api/works/selection-plan") {
+    return sendJson(await buildWorkSelectionPlan(env));
+  }
+
+  if (request.method === "POST" && pathname === "/api/works/prune") {
+    const confirmation = String(
+      url.searchParams.get("confirm") || request.headers.get("x-work-prune-confirmation") || ""
+    ).trim();
+    const dryRun =
+      url.searchParams.get("dryRun") === "1" ||
+      url.searchParams.get("dry_run") === "1" ||
+      confirmation !== WORK_PRUNE_CONFIRMATION;
+    return sendJson(await pruneUnselectedWorks(env, { dryRun, confirmation }));
   }
 
   if ((request.method === "GET" || request.method === "POST") && pathname === "/api/dmm/affiliate-backfill") {
@@ -779,6 +777,165 @@ async function ensureContactMessagesTable(env) {
   contactMessagesTableReady = true;
 }
 
+async function ensureWorkSelectionTables(env) {
+  if (workSelectionTablesReady) return;
+
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS article_selection_memberships (
+      article_slug TEXT NOT NULL,
+      product_id TEXT NOT NULL DEFAULT '',
+      source_key TEXT NOT NULL,
+      source_rank INTEGER NOT NULL DEFAULT 0,
+      observed_at TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      PRIMARY KEY (article_slug, source_key)
+    )`
+  ).run();
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_article_selection_source ON article_selection_memberships(source_key, source_rank)"
+  ).run();
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_article_selection_product ON article_selection_memberships(product_id)"
+  ).run();
+  workSelectionTablesReady = true;
+}
+
+async function recordArticleSelection(env, selection) {
+  await ensureWorkSelectionTables(env);
+  await prepareArticleSelection(env, selection).run();
+}
+
+function prepareArticleSelection(env, selection) {
+  return env.DB.prepare(
+    `INSERT INTO article_selection_memberships (
+      article_slug, product_id, source_key, source_rank, observed_at, run_id
+    ) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(article_slug, source_key) DO UPDATE SET
+      product_id = excluded.product_id,
+      source_rank = excluded.source_rank,
+      observed_at = excluded.observed_at,
+      run_id = excluded.run_id`
+  )
+    .bind(
+      selection.slug,
+      selection.productId || "",
+      selection.sourceKey,
+      selection.rank || 0,
+      selection.observedAt,
+      selection.runId
+    );
+}
+
+async function buildWorkSelectionPlan(env) {
+  await ensureWorkSelectionTables(env);
+  const [{ results: articleRows }, { results: membershipRows }] = await Promise.all([
+    env.DB.prepare(
+      `SELECT slug, title, status, source_type, product_id, circle_name, author_name, updated_at
+       FROM articles
+       ORDER BY updated_at DESC, title ASC`
+    ).all(),
+    env.DB.prepare(
+      `SELECT article_slug, product_id, source_key, source_rank, observed_at
+       FROM article_selection_memberships
+       ORDER BY source_key, source_rank, article_slug`
+    ).all(),
+  ]);
+
+  const membershipsBySlug = new Map();
+  const sourceCounts = {};
+  for (const row of membershipRows || []) {
+    if (!WORK_SELECTION_SOURCE_KEY_VALUES.has(row.source_key)) continue;
+    const items = membershipsBySlug.get(row.article_slug) || [];
+    items.push({
+      source_key: row.source_key,
+      rank: Number(row.source_rank || 0),
+      observed_at: row.observed_at || "",
+    });
+    membershipsBySlug.set(row.article_slug, items);
+    sourceCounts[row.source_key] = (sourceCounts[row.source_key] || 0) + 1;
+  }
+
+  const protectedMakerSet = new Set(PROTECTED_MAKERS);
+  const kept = [];
+  const deletionCandidates = [];
+  for (const row of articleRows || []) {
+    const protectedMaker =
+      protectedMakerSet.has(String(row.circle_name || "").trim()) ||
+      protectedMakerSet.has(String(row.author_name || "").trim());
+    const memberships = membershipsBySlug.get(row.slug) || [];
+    const item = {
+      slug: row.slug,
+      title: row.title,
+      status: row.status,
+      source_type: row.source_type,
+      product_id: row.product_id || "",
+      circle_name: row.circle_name || "",
+      author_name: row.author_name || "",
+      updated_at: row.updated_at || "",
+      keep_reasons: [
+        ...(protectedMaker ? ["protected_maker"] : []),
+        ...memberships.map((membership) => membership.source_key),
+      ],
+      memberships,
+    };
+    if (item.keep_reasons.length) {
+      kept.push(item);
+    } else {
+      deletionCandidates.push(item);
+    }
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    policy: WORK_SELECTION_POLICY,
+    confirmation_required_for_delete: WORK_PRUNE_CONFIRMATION,
+    counts: {
+      current: (articleRows || []).length,
+      keep: kept.length,
+      delete: deletionCandidates.length,
+      memberships_by_source: sourceCounts,
+    },
+    kept,
+    deletion_candidates: deletionCandidates,
+  };
+}
+
+async function pruneUnselectedWorks(env, options = {}) {
+  const plan = await buildWorkSelectionPlan(env);
+  if (options.dryRun) {
+    return {
+      ...plan,
+      dry_run: true,
+      deleted: 0,
+    };
+  }
+  if (options.confirmation !== WORK_PRUNE_CONFIRMATION) {
+    throw new Error(`confirm must be ${WORK_PRUNE_CONFIRMATION}`);
+  }
+
+  let deleted = 0;
+  for (const chunk of chunksOf(plan.deletion_candidates, 25)) {
+    const membershipDeletes = chunk.map((item) =>
+      env.DB.prepare("DELETE FROM article_selection_memberships WHERE article_slug = ?").bind(item.slug)
+    );
+    const articleDeletes = chunk.map((item) =>
+      env.DB.prepare("DELETE FROM articles WHERE slug = ?").bind(item.slug)
+    );
+    const results = await env.DB.batch([...membershipDeletes, ...articleDeletes]);
+    deleted += results
+      .slice(membershipDeletes.length)
+      .reduce((total, result) => total + Number(result?.meta?.changes || 0), 0);
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    dry_run: false,
+    deleted,
+    counts_before: plan.counts,
+    counts_after: await articleCounts(env),
+  };
+}
+
 async function saveArticle(env, input) {
   await ensureArticleEditorialColumns(env);
 
@@ -819,8 +976,12 @@ async function saveArticle(env, input) {
 }
 
 async function insertArticle(env, metadata, body, productId) {
+  await prepareInsertArticle(env, metadata, body, productId).run();
+}
+
+function prepareInsertArticle(env, metadata, body, productId) {
   const now = metadata.updated_at || new Date().toISOString();
-  await env.DB.prepare(
+  return env.DB.prepare(
     `INSERT INTO articles (
       schema_version, title, slug, status, article_type, source_type, published_at, updated_at,
       excerpt, seo_title, product_title, circle_name, author_name, source_url, affiliate_url,
@@ -859,12 +1020,16 @@ async function insertArticle(env, metadata, body, productId) {
       productId,
       now,
       isDmmImportedSourceType(metadata.source_type) ? now : null
-    )
-    .run();
+    );
 }
 
 async function updateArticle(env, oldSlug, metadata, body, productId) {
-  const result = await env.DB.prepare(
+  const result = await prepareUpdateArticle(env, oldSlug, metadata, body, productId).run();
+  return Boolean(result?.meta?.changes);
+}
+
+function prepareUpdateArticle(env, oldSlug, metadata, body, productId) {
+  return env.DB.prepare(
     `UPDATE articles SET
       schema_version = ?, title = ?, slug = ?, status = ?, article_type = ?, source_type = ?,
       published_at = ?, updated_at = ?, excerpt = ?, seo_title = ?, product_title = ?,
@@ -904,9 +1069,7 @@ async function updateArticle(env, oldSlug, metadata, body, productId) {
       productId,
       isDmmImportedSourceType(metadata.source_type) ? metadata.updated_at : null,
       oldSlug
-    )
-    .run();
-  return Boolean(result?.meta?.changes);
+    );
 }
 
 function isDmmImportedSourceType(value) {
@@ -1111,6 +1274,10 @@ async function importDmmApiItems(env, options = {}) {
   const media = normalizeDmmApiMedia(options.media || env.DMM_API_IMPORT_MEDIA);
   const floor = normalizeDmmApiFloor(options.floor || env.DMM_API_IMPORT_FLOOR);
   const keyword = String(options.keyword || "").trim();
+  const exactMaker = String(options.exactMaker || "").trim();
+  const selectionSource = normalizeWorkSelectionSource(options.selectionSource);
+  const replaceSelection = Boolean(options.replaceSelection && selectionSource);
+  const selectionRunId = crypto.randomUUID();
   const delayMs = boundedNonNegativeInteger(
     options.delayMs,
     env.DMM_API_REQUEST_DELAY_MS || 0,
@@ -1128,6 +1295,11 @@ async function importDmmApiItems(env, options = {}) {
     sort,
     media,
     keyword,
+    exact_maker: exactMaker,
+    selection_source: selectionSource,
+    replace_selection: replaceSelection,
+    selection_run_id: selectionRunId,
+    selection_removed: 0,
     offset,
     limit,
     hits,
@@ -1149,7 +1321,11 @@ async function importDmmApiItems(env, options = {}) {
   };
 
   summary.counts_before = await articleCounts(env);
+  if (selectionSource && !dryRun) {
+    await ensureWorkSelectionTables(env);
+  }
 
+  const candidates = [];
   let currentOffset = offset;
   for (let page = 1; summary.seen < limit && page <= pageLimit; page += 1) {
     await waitBeforeDetailRequest(summary.api_requests, delayMs);
@@ -1178,21 +1354,44 @@ async function importDmmApiItems(env, options = {}) {
         summary.filtered += 1;
         continue;
       }
+      const detail = dmmApiItemDetail(item, linkAffiliateId);
+      if (exactMaker && detail.circleName !== exactMaker) {
+        summary.filtered += 1;
+        continue;
+      }
 
       summary.seen += 1;
-      await importOneDmmApiItem(env, item, {
-        affiliateId: linkAffiliateId,
-        dryRun,
-        floor,
-        sort,
-        media,
-        rank: apiRank,
-        summary,
-      });
+      candidates.push({ detail, rank: apiRank });
     }
 
     if (payload.items.length < hits) break;
     currentOffset += hits;
+  }
+
+  await persistDmmApiCandidates(env, candidates, {
+    dryRun,
+    floor,
+    sort,
+    media,
+    selectionSource,
+    selectionRunId,
+    observedAt: startedAt,
+    summary,
+  });
+
+  if (
+    selectionSource &&
+    replaceSelection &&
+    !dryRun &&
+    summary.failed === 0 &&
+    summary.seen > 0
+  ) {
+    const result = await env.DB.prepare(
+      "DELETE FROM article_selection_memberships WHERE source_key = ? AND run_id <> ?"
+    )
+      .bind(selectionSource, selectionRunId)
+      .run();
+    summary.selection_removed = Number(result?.meta?.changes || 0);
   }
 
   summary.counts_after = dryRun ? summary.counts_before : await articleCounts(env);
@@ -1216,12 +1415,191 @@ async function importDmmApiItems(env, options = {}) {
       updated: summary.updated,
       skipped: summary.skipped,
       failed: summary.failed,
+      exact_maker: summary.exact_maker,
+      selection_source: summary.selection_source,
+      selection_removed: summary.selection_removed,
       counts_before: summary.counts_before,
       counts_after: summary.counts_after,
     })
   );
 
   return summary;
+}
+
+async function persistDmmApiCandidates(env, candidates, context) {
+  if (!candidates.length) return;
+
+  await ensureArticleEditorialColumns(env);
+  if (context.selectionSource && !context.dryRun) {
+    await ensureWorkSelectionTables(env);
+  }
+
+  const { results } = await env.DB.prepare("SELECT * FROM articles").all();
+  const index = buildDmmArticleIndex(results || []);
+  const statements = [];
+
+  for (const candidate of candidates) {
+    const detail = candidate.detail;
+    const itemSummary = {
+      rank: candidate.rank,
+      product_id: detail.productId,
+      title: detail.title,
+      media_type: detail.mediaType,
+    };
+
+    try {
+      if (!detail.title || !detail.url) {
+        throw new Error("API item is missing title or URL.");
+      }
+
+      const duplicate = findDmmIndexedArticle(index, detail);
+      let finalArticle;
+      let itemStatus;
+
+      if (duplicate) {
+        const updateInput = buildExistingArticleUpdate(
+          duplicate,
+          detail,
+          detail.productId,
+          { refreshApiMetadata: true }
+        );
+        if (updateInput) {
+          const metadata = normalizeArticle(updateInput, duplicate.metadata);
+          finalArticle = {
+            metadata: { ...metadata, product_id: detail.productId || duplicate.metadata.product_id || "" },
+            body: updateInput.body || "",
+          };
+          if (!context.dryRun) {
+            statements.push(
+              prepareUpdateArticle(
+                env,
+                duplicate.metadata.slug,
+                metadata,
+                finalArticle.body,
+                detail.productId || duplicate.metadata.product_id || null
+              )
+            );
+          }
+          context.summary.updated += 1;
+          itemStatus = context.dryRun ? "update-dry-run" : "updated";
+        } else {
+          finalArticle = duplicate;
+          context.summary.skipped += 1;
+          itemStatus = "skipped";
+        }
+      } else {
+        const articleInput = dmmApiDetailToArticle(detail, {
+          floor: context.floor,
+          sort: context.sort,
+          media: context.media,
+        });
+        const metadata = normalizeArticle(articleInput);
+        finalArticle = {
+          metadata: { ...metadata, product_id: detail.productId || "" },
+          body: articleInput.body || "",
+        };
+        if (!context.dryRun) {
+          statements.push(
+            prepareInsertArticle(env, metadata, finalArticle.body, detail.productId || null)
+          );
+        }
+        context.summary.created += 1;
+        itemStatus = context.dryRun ? "dry-run" : "created";
+      }
+
+      addDmmArticleToIndex(index, finalArticle);
+      if (context.selectionSource && !context.dryRun) {
+        statements.push(
+          prepareArticleSelection(env, {
+            slug: finalArticle.metadata.slug,
+            productId: detail.productId || finalArticle.metadata.product_id || "",
+            sourceKey: context.selectionSource,
+            rank: candidate.rank,
+            observedAt: context.observedAt,
+            runId: context.selectionRunId,
+          })
+        );
+      }
+
+      context.summary.items.push({
+        ...itemSummary,
+        slug: finalArticle.metadata.slug,
+        status: itemStatus,
+        ...(duplicate && itemStatus === "skipped"
+          ? { duplicate: duplicate.metadata.slug }
+          : {}),
+      });
+    } catch (error) {
+      context.summary.failed += 1;
+      context.summary.items.push({ ...itemSummary, status: "failed", error: error.message });
+    }
+  }
+
+  if (!context.dryRun && statements.length) {
+    for (const statementChunk of chunksOf(statements, 40)) {
+      await env.DB.batch(statementChunk);
+    }
+  }
+}
+
+function buildDmmArticleIndex(rows) {
+  const index = {
+    slugs: new Map(),
+    productIds: new Map(),
+    urls: new Map(),
+    titleCircles: new Map(),
+    titles: new Map(),
+  };
+  for (const row of rows) {
+    addDmmArticleToIndex(index, {
+      metadata: rowToMetadata(row),
+      body: row.body || "",
+    });
+  }
+  return index;
+}
+
+function addDmmArticleToIndex(index, article) {
+  const metadata = article?.metadata || {};
+  const slugKey = normalizeKey(metadata.slug);
+  if (slugKey) index.slugs.set(slugKey, article);
+
+  const productIdKey = normalizeKey(metadata.product_id);
+  if (productIdKey) index.productIds.set(productIdKey, article);
+
+  for (const value of [metadata.source_url, metadata.affiliate_url]) {
+    const urlKey = normalizeUrlKey(value);
+    if (urlKey) index.urls.set(urlKey, article);
+  }
+
+  for (const value of [metadata.title, metadata.product_title]) {
+    const titleKey = normalizeKey(value);
+    if (!titleKey) continue;
+    index.titles.set(titleKey, article);
+    const circleKey = normalizeKey(metadata.circle_name);
+    if (circleKey) index.titleCircles.set(`${titleKey}|${circleKey}`, article);
+  }
+}
+
+function findDmmIndexedArticle(index, detail) {
+  const slugMatch = index.slugs.get(normalizeKey(slugify(detail.title)));
+  if (slugMatch) return slugMatch;
+
+  const productMatch = index.productIds.get(normalizeKey(detail.productId));
+  if (productMatch) return productMatch;
+
+  for (const value of [detail.url, detail.affiliateUrl]) {
+    const urlMatch = index.urls.get(normalizeUrlKey(value));
+    if (urlMatch) return urlMatch;
+  }
+
+  const titleKey = normalizeKey(detail.title);
+  const circleKey = normalizeKey(detail.circleName);
+  if (titleKey && circleKey) {
+    const titleCircleMatch = index.titleCircles.get(`${titleKey}|${circleKey}`);
+    if (titleCircleMatch) return titleCircleMatch;
+  }
+  return index.titles.get(titleKey) || null;
 }
 
 async function importOneDmmApiItem(env, item, context) {
@@ -1249,7 +1627,9 @@ async function importOneDmmApiItem(env, item, context) {
 
     if (duplicate) {
       const article = await readArticle(env, duplicate.slug);
-      const updateInput = buildExistingArticleUpdate(article, detail, detail.productId);
+      const updateInput = buildExistingArticleUpdate(article, detail, detail.productId, {
+        refreshApiMetadata: true,
+      });
       if (updateInput) {
         if (!context.dryRun) {
           await saveArticle(env, updateInput);
@@ -1264,6 +1644,16 @@ async function importOneDmmApiItem(env, item, context) {
         context.summary.skipped += 1;
         context.summary.items.push({ ...itemSummary, status: "skipped", duplicate: duplicate.slug });
       }
+      if (!context.dryRun && context.selectionSource) {
+        await recordArticleSelection(env, {
+          slug: updateInput?.slug || duplicate.slug,
+          productId: detail.productId,
+          sourceKey: context.selectionSource,
+          rank: context.rank,
+          observedAt: context.observedAt,
+          runId: context.selectionRunId,
+        });
+      }
       return;
     }
 
@@ -1275,6 +1665,16 @@ async function importOneDmmApiItem(env, item, context) {
 
     if (!context.dryRun) {
       await saveArticle(env, article);
+      if (context.selectionSource) {
+        await recordArticleSelection(env, {
+          slug: article.slug,
+          productId: detail.productId,
+          sourceKey: context.selectionSource,
+          rank: context.rank,
+          observedAt: context.observedAt,
+          runId: context.selectionRunId,
+        });
+      }
     }
 
     context.summary.created += 1;
@@ -1453,6 +1853,11 @@ function normalizeDmmApiMedia(value) {
 function normalizeDmmApiFloor(value) {
   const floor = String(value || DEFAULT_DMM_API_FLOOR).trim();
   return DMM_API_FLOOR_VALUES.has(floor) ? floor : DEFAULT_DMM_API_FLOOR;
+}
+
+function normalizeWorkSelectionSource(value) {
+  const source = String(value || "").trim();
+  return WORK_SELECTION_SOURCE_KEY_VALUES.has(source) ? source : "";
 }
 
 function dmmApiItemMatchesMedia(item, media) {
@@ -1763,15 +2168,38 @@ function hasImportDetails(article) {
   );
 }
 
-function buildExistingArticleUpdate(article, detail, productId) {
+function buildExistingArticleUpdate(article, detail, productId, options = {}) {
   if (!article) return null;
   const metadata = article.metadata || {};
+  const refreshApiMetadata =
+    Boolean(options.refreshApiMetadata) && isDmmImportedSourceType(metadata.source_type);
   const currentGenres = metadata.genres || [];
-  const nextExcerpt = metadata.excerpt || detail.workComment || "";
-  const nextSourceUrl = metadata.source_url || detail.url || "";
+  const nextExcerpt = refreshApiMetadata
+    ? detail.workComment || metadata.excerpt || ""
+    : metadata.excerpt || detail.workComment || "";
+  const nextSourceUrl = refreshApiMetadata
+    ? detail.url || metadata.source_url || ""
+    : metadata.source_url || detail.url || "";
   const nextAffiliateUrl = preferredAffiliateUrl(metadata.affiliate_url, detail.affiliateUrl, detail.url);
-  const nextThumbnailUrl = metadata.thumbnail_url || detail.thumbnailUrl || "";
-  const nextGenres = currentGenres.length ? currentGenres : detail.genres || [];
+  const nextThumbnailUrl = refreshApiMetadata
+    ? detail.thumbnailUrl || metadata.thumbnail_url || ""
+    : metadata.thumbnail_url || detail.thumbnailUrl || "";
+  const nextGenres =
+    refreshApiMetadata && (detail.genres || []).length
+      ? detail.genres
+      : currentGenres.length
+        ? currentGenres
+        : detail.genres || [];
+  const nextProductTitle =
+    refreshApiMetadata && detail.title ? detail.title : metadata.product_title || detail.title || "";
+  const nextCircleName =
+    refreshApiMetadata && detail.circleName
+      ? detail.circleName
+      : metadata.circle_name || detail.circleName || "";
+  const nextAuthorName =
+    refreshApiMetadata && detail.authorName
+      ? detail.authorName
+      : metadata.author_name || detail.authorName || "";
   const currentSampleImages = metadata.sample_images || [];
   const nextSampleImages = mergeSampleImages(currentSampleImages, detail.sampleImageUrls || []);
 
@@ -1780,6 +2208,9 @@ function buildExistingArticleUpdate(article, detail, productId) {
     nextSourceUrl !== (metadata.source_url || "") ||
     nextAffiliateUrl !== (metadata.affiliate_url || "") ||
     nextThumbnailUrl !== (metadata.thumbnail_url || "") ||
+    nextProductTitle !== (metadata.product_title || "") ||
+    nextCircleName !== (metadata.circle_name || "") ||
+    nextAuthorName !== (metadata.author_name || "") ||
     !arraysEqual(nextSampleImages, currentSampleImages) ||
     !arraysEqual(nextGenres, currentGenres);
 
@@ -1791,6 +2222,9 @@ function buildExistingArticleUpdate(article, detail, productId) {
     source_url: nextSourceUrl,
     affiliate_url: nextAffiliateUrl,
     thumbnail_url: nextThumbnailUrl,
+    product_title: nextProductTitle,
+    circle_name: nextCircleName,
+    author_name: nextAuthorName,
     sample_images: nextSampleImages,
     genres: nextGenres,
   };
@@ -3697,6 +4131,14 @@ function normalizeKey(value) {
 
 function unique(values) {
   return [...new Set(values)];
+}
+
+function chunksOf(values, size) {
+  const chunks = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
 }
 
 function positiveInteger(value, fallback) {

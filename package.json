@@ -7,8 +7,6 @@
     "blog:admin": "node scripts/blog-admin.mjs",
     "dmm:import": "node scripts/call-cloudflare-dmm-import.mjs",
     "dmm:import:dry": "node scripts/call-cloudflare-dmm-import.mjs --dry-run",
-    "dmm:import:legacy": "node scripts/dmm-ranking-import.mjs",
-    "dmm:import:legacy:dry": "node scripts/dmm-ranking-import.mjs --dry-run",
     "dmm:affiliate": "node scripts/backfill-dmm-affiliate-links.mjs",
     "dmm:affiliate:dry": "node scripts/backfill-dmm-affiliate-links.mjs --dry-run",
     "cf:config": "node scripts/verify-cloudflare-config.mjs",
@@ -28,7 +26,10 @@
     "cf:dmm:affiliate": "node scripts/call-cloudflare-dmm-affiliate-backfill.mjs",
     "cf:dmm:affiliate:dry": "node scripts/call-cloudflare-dmm-affiliate-backfill.mjs --dry-run",
     "works:update": "node scripts/call-cloudflare-dmm-import.mjs",
-    "works:update:dry": "node scripts/call-cloudflare-dmm-import.mjs --dry-run"
+    "works:update:dry": "node scripts/call-cloudflare-dmm-import.mjs --dry-run",
+    "works:selection": "node scripts/manage-work-selection.mjs",
+    "works:selection:plan": "node scripts/manage-work-selection.mjs plan",
+    "works:selection:sync": "node scripts/manage-work-selection.mjs sync"
   },
   "devDependencies": {
     "wrangler": "^4.94.0"

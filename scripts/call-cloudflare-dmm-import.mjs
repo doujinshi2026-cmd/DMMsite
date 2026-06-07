@@ -19,6 +19,9 @@ const sort = readArg("--sort");
 const media = readArg("--media");
 const floor = readArg("--floor");
 const keyword = readArg("--keyword");
+const exactMaker = readArg("--exact-maker") || readArg("--exact_maker");
+const selectionSource = readArg("--selection-source") || readArg("--selection_source");
+const replaceSelection = process.argv.includes("--replace-selection");
 const delayMs = readArg("--delay-ms") || readArg("--delay_ms");
 const baseUrl = String(process.env.CLOUDFLARE_WORKER_URL || DEFAULT_URL).replace(/\/$/u, "");
 const user = String(process.env.BLOG_CMS_USER || "admin");
@@ -38,6 +41,9 @@ if (sort) search.set("sort", sort);
 if (media) search.set("media", media);
 if (floor) search.set("floor", floor);
 if (keyword) search.set("keyword", keyword);
+if (exactMaker) search.set("exactMaker", exactMaker);
+if (selectionSource) search.set("selectionSource", selectionSource);
+if (replaceSelection) search.set("replaceSelection", "1");
 if (delayMs) search.set("delayMs", delayMs);
 const query = search.toString();
 const url = `${baseUrl}/api/dmm/import${query ? `?${query}` : ""}`;
@@ -66,6 +72,10 @@ function summarize(payload) {
     sort: payload.sort,
     media: payload.media,
     keyword: payload.keyword,
+    exact_maker: payload.exact_maker,
+    selection_source: payload.selection_source,
+    replace_selection: payload.replace_selection,
+    selection_removed: payload.selection_removed,
     offset: payload.offset,
     limit: payload.limit,
     hits: payload.hits,
