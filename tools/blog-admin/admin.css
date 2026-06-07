@@ -882,6 +882,137 @@ textarea:focus {
   margin: 0;
 }
 
+.primary-site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.primary-site-nav a,
+.section-more-link {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--blue);
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 700;
+  min-height: 38px;
+  padding: 7px 13px;
+  text-decoration: none;
+}
+
+.primary-site-nav a[aria-current="page"] {
+  background: #eef5f2;
+  border-color: #a9c7bb;
+  color: var(--accent-strong);
+}
+
+.daily-ranking {
+  border-bottom: 1px solid var(--line);
+  margin: 0 0 28px;
+  padding: 0 0 28px;
+}
+
+.ranking-heading {
+  align-items: end;
+}
+
+.ranking-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.ranking-grid-full {
+  margin-top: 24px;
+}
+
+.ranking-card {
+  background: #fff;
+  border: 1px solid #d8d2cc;
+  border-radius: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ranking-image-link {
+  background: #f1efec;
+  display: block;
+  position: relative;
+}
+
+.ranking-image-link img {
+  aspect-ratio: 4 / 3;
+  display: block;
+  object-fit: cover;
+  width: 100%;
+}
+
+.rank-badge {
+  align-items: center;
+  background: rgba(31, 41, 47, 0.9);
+  border-radius: 999px;
+  color: #fff;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  height: 32px;
+  justify-content: center;
+  left: 8px;
+  min-width: 32px;
+  padding: 0 8px;
+  position: absolute;
+  top: 8px;
+}
+
+.ranking-card-body {
+  padding: 11px;
+}
+
+.ranking-card h3 {
+  display: -webkit-box;
+  font-size: 14px;
+  line-height: 1.45;
+  margin: 0 0 7px;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.ranking-actions {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.secondary-action,
+.affiliate-action {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  justify-content: center;
+  min-height: 38px;
+  padding: 7px 9px;
+  text-align: center;
+  text-decoration: none;
+}
+
+.affiliate-action {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.affiliate-action:hover {
+  background: var(--accent-strong);
+}
+
 .weekly-picks {
   border-bottom: 1px solid var(--line);
   margin: 0 0 28px;
@@ -981,6 +1112,11 @@ textarea:focus {
   gap: 8px;
   margin-top: auto;
   padding-top: 12px;
+}
+
+.pick-actions .secondary-action,
+.pick-actions .pick-cta {
+  flex: 1 1 180px;
 }
 
 .pick-cta {
@@ -1396,6 +1532,47 @@ textarea:focus {
   width: 100%;
 }
 
+.affiliate-cta-box {
+  background: #fff8ed;
+  border: 1px solid #e5c894;
+  border-radius: 10px;
+  margin: 20px 0;
+  padding: 14px;
+  text-align: center;
+}
+
+.affiliate-cta-label,
+.affiliate-cta-note {
+  color: #5d5143;
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.affiliate-cta-button,
+.article-shell .affiliate-cta-button {
+  align-items: center;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  color: #fff;
+  display: flex;
+  font-size: 16px;
+  font-weight: 800;
+  justify-content: center;
+  margin: 8px 0;
+  min-height: 50px;
+  padding: 11px 16px;
+  text-decoration: none;
+  width: 100%;
+}
+
+.affiliate-cta-button:hover,
+.article-shell .affiliate-cta-button:hover {
+  background: var(--accent-strong);
+  color: #fff;
+}
+
 .work-comment {
   background: #fff;
   border: 1px solid var(--line);
@@ -1668,6 +1845,10 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
+  .ranking-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
   .form-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1757,6 +1938,14 @@ textarea:focus {
     gap: 4px;
   }
 
+  .ranking-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .section-more-link {
+    min-height: 44px;
+  }
+
   .weekly-pick-card {
     padding: 12px;
   }
@@ -1803,9 +1992,29 @@ textarea:focus {
   .article-shell .hero-link,
   .article-shell > article > .hero-image,
   .article-body,
-  .work-comment {
+  .work-comment,
+  .affiliate-cta-box {
     max-width: calc(100vw - 24px);
     width: 100%;
+  }
+
+  .primary-site-nav a,
+  .secondary-action,
+  .affiliate-action,
+  .pick-cta {
+    min-height: 44px;
+  }
+
+  .ranking-card-body {
+    padding: 9px;
+  }
+
+  .ranking-card h3 {
+    font-size: 13px;
+  }
+
+  .ranking-actions {
+    gap: 6px;
   }
 
   .article-shell .site-header h1 {

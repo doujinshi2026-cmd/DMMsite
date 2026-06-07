@@ -188,6 +188,32 @@ npm run works:selection:plan
 npm run works:selection -- prune --confirm DELETE_UNSELECTED_WORKS
 ```
 
+## アフィリエイト導線と効果測定
+
+公開サイトでは、次の場所にDMM APIから取得した `affiliateURL` を使用します。
+
+- トップページの人気作品TOP10
+- `/site/ranking` の人気作品TOP100
+- 編集部の注目作品
+- 作品詳細ページ上部・下部のCTA
+- 作品詳細ページのサンプル画像
+
+リンクはDMM/FANZAへ直接遷移し、クリック計測の完了を待ちません。表示回数とクリック数は、作品・掲載位置・日・端末種別ごとの合計値だけをD1へ保存します。CookieとIPアドレスは保存しません。
+
+直近30日分の配置別CTRと作品別クリック数は次のコマンドで取得できます。
+
+```powershell
+npm run affiliate:report
+```
+
+期間を変更する場合:
+
+```powershell
+npm run affiliate:report -- --days 90
+```
+
+結果は `logs/affiliate-metrics-report.json`、`logs/affiliate-metrics-placements.csv`、`logs/affiliate-metrics-articles.csv` に保存されます。
+
 ## Cloudflare WorkersでAPI自動更新
 
 本番運用では、ローカルPCのタスクスケジューラではなくCloudflare WorkersのCron Triggerで更新します。

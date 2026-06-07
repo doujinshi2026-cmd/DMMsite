@@ -29,7 +29,8 @@
     "works:update:dry": "node scripts/call-cloudflare-dmm-import.mjs --dry-run",
     "works:selection": "node scripts/manage-work-selection.mjs",
     "works:selection:plan": "node scripts/manage-work-selection.mjs plan",
-    "works:selection:sync": "node scripts/manage-work-selection.mjs sync"
+    "works:selection:sync": "node scripts/manage-work-selection.mjs sync",
+    "affiliate:report": "node scripts/report-affiliate-metrics.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.94.0"

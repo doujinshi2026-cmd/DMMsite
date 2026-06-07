@@ -33,6 +33,8 @@ const SITE_FACET_LIMIT = 24;
 const SITE_MAX_QUERY_LENGTH = 2048;
 const SITE_HTML_CACHE_SECONDS = 300;
 const SITE_SUGGESTIONS_CACHE_SECONDS = 3600;
+const SITE_RANKING_LIMIT = 100;
+const SITE_RANKING_PREVIEW_LIMIT = 10;
 const SITEMAP_FILTER_LIMIT = 80;
 const SITE_CONTACT_EMAIL = "doujinshi2026@gmail.com";
 const SITE_NAME = "オトナのよみもの案内";
@@ -48,6 +50,15 @@ const DMM_API_MEDIA_VALUES = new Set(["comic", "game", "cg", "voice", "all"]);
 const DMM_API_FLOOR_VALUES = new Set(["digital_doujin", "digital_doujin_bl", "digital_doujin_tl"]);
 const WORK_SELECTION_SOURCE_KEY_VALUES = new Set(Object.values(WORK_SELECTION_SOURCE_KEYS));
 const WORK_PRUNE_CONFIRMATION = "DELETE_UNSELECTED_WORKS";
+const AFFILIATE_EVENT_TYPES = new Set(["impression", "click"]);
+const AFFILIATE_PLACEMENTS = new Set([
+  "article_top",
+  "article_bottom",
+  "article_hero",
+  "article_sample",
+  "ranking_card",
+  "weekly_pick",
+]);
 const ARTICLE_EDITORIAL_COLUMNS = [
   ["sample_images_json", "sample_images_json TEXT NOT NULL DEFAULT '[]'"],
   ["weekly_pick", "weekly_pick INTEGER NOT NULL DEFAULT 0"],
@@ -57,6 +68,7 @@ const ARTICLE_EDITORIAL_COLUMNS = [
 let articleEditorialColumnsReady = false;
 let contactMessagesTableReady = false;
 let workSelectionTablesReady = false;
+let affiliateMetricsTableReady = false;
 
 export default {
   async fetch(request, env, ctx) {
@@ -141,6 +153,10 @@ async function route(request, env, ctx) {
     );
   }
 
+  if (request.method === "POST" && pathname === "/events/affiliate") {
+    return handleAffiliateEvent(request, env);
+  }
+
   if (request.method === "GET" && pathname === "/site") {
     if (url.search.length > SITE_MAX_QUERY_LENGTH) {
       return sendText("検索条件が長すぎます。条件を減らして再度お試しください。", 414);
@@ -182,6 +198,18 @@ async function route(request, env, ctx) {
           notice,
           origin: url.origin,
         }),
+        200,
+        publicCacheControl(SITE_HTML_CACHE_SECONDS)
+      );
+    });
+  }
+
+  if (request.method === "GET" && pathname === "/site/ranking") {
+    const cacheUrl = new URL("/site/ranking", url.origin).href;
+    return cachedPublicResponse(cacheUrl, ctx, async () => {
+      const ranking = await loadDailyRanking(env, SITE_RANKING_LIMIT);
+      return sendHtml(
+        renderRankingPage(ranking, { origin: url.origin }),
         200,
         publicCacheControl(SITE_HTML_CACHE_SECONDS)
       );
@@ -350,6 +378,11 @@ async function routeApi(request, env, pathname, url) {
     return sendJson(await buildWorkSelectionPlan(env));
   }
 
+  if (request.method === "GET" && pathname === "/api/affiliate/metrics") {
+    const days = boundedPositiveInteger(url.searchParams.get("days"), 30, 180);
+    return sendJson(await affiliateMetricsReport(env, days));
+  }
+
   if (request.method === "POST" && pathname === "/api/works/prune") {
     const confirmation = String(
       url.searchParams.get("confirm") || request.headers.get("x-work-prune-confirmation") || ""
@@ -455,7 +488,8 @@ const SITE_ARTICLE_COLUMNS = `
   a.published_at, a.updated_at, a.excerpt, a.seo_title, a.product_title,
   a.circle_name, a.author_name, a.source_url, a.affiliate_url, a.thumbnail_url,
   a.sample_images_json, a.genres_json, a.emotions_json, a.weekly_pick,
-  a.weekly_pick_order, a.rights_status, a.pr_label, a.automation_ready, a.product_id
+  a.weekly_pick_order, a.editor_note, a.rights_status, a.pr_label,
+  a.automation_ready, a.product_id
 `;
 
 function parseSiteRequest(url) {
@@ -492,6 +526,7 @@ function boundedFilterText(value, maxLength) {
 
 async function loadSiteIndexData(env, filters, requestedPage) {
   await ensureArticleEditorialColumns(env);
+  await ensureWorkSelectionTables(env);
   const filtered = hasActiveFilters(filters);
   const listWhere = buildSiteWhere(filters, { excludeFeatured: !filtered });
   const totalStatement = env.DB.prepare(
@@ -555,14 +590,16 @@ async function loadSiteIndexData(env, filters, requestedPage) {
          LIMIT 6`
       )
     );
+    statements.push(dailyRankingStatement(env, SITE_RANKING_PREVIEW_LIMIT));
   }
 
-  const [pageResult, circleResult, authorResult, genreResult, weeklyResult] =
+  const [pageResult, circleResult, authorResult, genreResult, weeklyResult, rankingResult] =
     await env.DB.batch(statements);
 
   return {
     articles: (pageResult?.results || []).map(rowToMetadata),
     weeklyPicks: (weeklyResult?.results || []).map(rowToMetadata),
+    dailyRanking: (rankingResult?.results || []).map(rankingRowToMetadata),
     facets: {
       circles: facetRows(circleResult),
       authors: facetRows(authorResult),
@@ -572,6 +609,34 @@ async function loadSiteIndexData(env, filters, requestedPage) {
     matchedCount,
     page,
     pageCount,
+  };
+}
+
+function dailyRankingStatement(env, limit) {
+  return env.DB.prepare(
+    `SELECT ${SITE_ARTICLE_COLUMNS},
+            selection.source_rank AS selection_rank,
+            selection.observed_at AS selection_observed_at
+     FROM article_selection_memberships selection
+     INNER JOIN articles a ON a.slug = selection.article_slug
+     WHERE selection.source_key = ?
+       AND a.status = 'published'
+     ORDER BY selection.source_rank ASC
+     LIMIT ?`
+  ).bind(WORK_SELECTION_SOURCE_KEYS.recurringRank, limit);
+}
+
+async function loadDailyRanking(env, limit = SITE_RANKING_LIMIT) {
+  await ensureWorkSelectionTables(env);
+  const result = await dailyRankingStatement(env, limit).all();
+  return (result?.results || []).map(rankingRowToMetadata);
+}
+
+function rankingRowToMetadata(row) {
+  return {
+    ...rowToMetadata(row),
+    selection_rank: Number(row.selection_rank || 0),
+    selection_observed_at: row.selection_observed_at || "",
   };
 }
 
@@ -798,6 +863,194 @@ async function ensureWorkSelectionTables(env) {
     "CREATE INDEX IF NOT EXISTS idx_article_selection_product ON article_selection_memberships(product_id)"
   ).run();
   workSelectionTablesReady = true;
+}
+
+async function ensureAffiliateMetricsTable(env) {
+  if (affiliateMetricsTableReady) return;
+
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS affiliate_metrics_daily (
+      metric_date TEXT NOT NULL,
+      article_slug TEXT NOT NULL,
+      product_id TEXT NOT NULL DEFAULT '',
+      placement TEXT NOT NULL,
+      variant TEXT NOT NULL DEFAULT '',
+      device_type TEXT NOT NULL DEFAULT 'unknown',
+      event_type TEXT NOT NULL CHECK (event_type IN ('impression', 'click')),
+      event_count INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (
+        metric_date, article_slug, placement, variant, device_type, event_type
+      )
+    )`
+  ).run();
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_affiliate_metrics_date ON affiliate_metrics_daily(metric_date, placement, event_type)"
+  ).run();
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_affiliate_metrics_article ON affiliate_metrics_daily(article_slug, metric_date)"
+  ).run();
+  affiliateMetricsTableReady = true;
+}
+
+async function handleAffiliateEvent(request, env) {
+  const contentLength = Number(request.headers.get("content-length") || 0);
+  if (contentLength > 4096) return sendText("Payload too large", 413);
+  const requestOrigin = new URL(request.url).origin;
+  const origin = String(request.headers.get("origin") || "");
+  const fetchSite = String(request.headers.get("sec-fetch-site") || "");
+  if ((origin && origin !== requestOrigin) || fetchSite === "cross-site") {
+    return sendText("Forbidden", 403);
+  }
+  const detectedDevice = deviceType(request.headers.get("user-agent"));
+  if (detectedDevice === "bot") {
+    return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
+  }
+
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return sendText("Invalid JSON", 400);
+  }
+
+  const eventType = String(payload?.event || "").trim();
+  const slug = String(payload?.slug || "").trim().slice(0, 180);
+  const placement = String(payload?.placement || "").trim();
+  const variant = String(payload?.variant || "").trim().slice(0, 20);
+  if (
+    !AFFILIATE_EVENT_TYPES.has(eventType) ||
+    !slug ||
+    !AFFILIATE_PLACEMENTS.has(placement) ||
+    !/^[a-z0-9_-]*$/u.test(variant)
+  ) {
+    return sendText("Invalid event", 400);
+  }
+
+  const article = await env.DB.prepare(
+    "SELECT slug, product_id FROM articles WHERE slug = ? AND status = 'published' LIMIT 1"
+  )
+    .bind(slug)
+    .first();
+  if (!article) return sendText("Not found", 404);
+
+  await ensureAffiliateMetricsTable(env);
+  const now = new Date();
+  await env.DB.prepare(
+    `INSERT INTO affiliate_metrics_daily (
+      metric_date, article_slug, product_id, placement, variant,
+      device_type, event_type, event_count, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+    ON CONFLICT (
+      metric_date, article_slug, placement, variant, device_type, event_type
+    ) DO UPDATE SET
+      product_id = excluded.product_id,
+      event_count = affiliate_metrics_daily.event_count + 1,
+      updated_at = excluded.updated_at`
+  )
+    .bind(
+      jstDateKey(now),
+      article.slug,
+      article.product_id || "",
+      placement,
+      variant,
+      detectedDevice,
+      eventType,
+      now.toISOString()
+    )
+    .run();
+
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "Cache-Control": "no-store",
+      "X-Robots-Tag": "noindex, nofollow",
+    },
+  });
+}
+
+async function affiliateMetricsReport(env, days) {
+  await ensureAffiliateMetricsTable(env);
+  const since = jstDateKey(new Date(Date.now() - (days - 1) * 86400000));
+  const [totalsResult, articlesResult, dailyResult] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT
+         placement,
+         variant,
+         SUM(CASE WHEN event_type = 'impression' THEN event_count ELSE 0 END) AS impressions,
+         SUM(CASE WHEN event_type = 'click' THEN event_count ELSE 0 END) AS clicks
+       FROM affiliate_metrics_daily
+       WHERE metric_date >= ?
+       GROUP BY placement, variant
+       ORDER BY clicks DESC, impressions DESC`
+    ).bind(since),
+    env.DB.prepare(
+      `SELECT
+         m.article_slug,
+         a.title,
+         a.circle_name,
+         SUM(CASE WHEN m.event_type = 'impression' THEN m.event_count ELSE 0 END) AS impressions,
+         SUM(CASE WHEN m.event_type = 'click' THEN m.event_count ELSE 0 END) AS clicks
+       FROM affiliate_metrics_daily m
+       LEFT JOIN articles a ON a.slug = m.article_slug
+       WHERE m.metric_date >= ?
+       GROUP BY m.article_slug, a.title, a.circle_name
+       ORDER BY clicks DESC, impressions DESC
+       LIMIT 50`
+    ).bind(since),
+    env.DB.prepare(
+      `SELECT
+         metric_date,
+         SUM(CASE WHEN event_type = 'impression' THEN event_count ELSE 0 END) AS impressions,
+         SUM(CASE WHEN event_type = 'click' THEN event_count ELSE 0 END) AS clicks
+       FROM affiliate_metrics_daily
+       WHERE metric_date >= ?
+       GROUP BY metric_date
+       ORDER BY metric_date ASC`
+    ).bind(since),
+  ]);
+
+  return {
+    generated_at: new Date().toISOString(),
+    days,
+    since,
+    totals: metricRows(totalsResult?.results || []),
+    top_articles: metricRows(articlesResult?.results || []),
+    daily: metricRows(dailyResult?.results || []),
+    privacy: "CookieとIPアドレスは保存せず、日別の表示回数とクリック数だけを集計します。",
+  };
+}
+
+function metricRows(rows) {
+  return rows.map((row) => {
+    const impressions = Number(row.impressions || 0);
+    const clicks = Number(row.clicks || 0);
+    return {
+      ...row,
+      impressions,
+      clicks,
+      ctr_percent: impressions ? Number(((clicks / impressions) * 100).toFixed(2)) : 0,
+    };
+  });
+}
+
+function jstDateKey(date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
+}
+
+function deviceType(userAgent) {
+  const value = String(userAgent || "");
+  if (/bot|crawler|spider|slurp|preview/iu.test(value)) return "bot";
+  if (/ipad|tablet/iu.test(value)) return "tablet";
+  if (/mobile|iphone|android/iu.test(value)) return "mobile";
+  return value ? "desktop" : "unknown";
 }
 
 async function recordArticleSelection(env, selection) {
@@ -1174,6 +1427,7 @@ async function renderSitemap(env, origin) {
   };
 
   addUrl("/site", latest, "1.0", "daily");
+  addUrl("/site/ranking", latest, "0.9", "daily");
   addUrl("/site/policy", latest, "0.3", "monthly");
 
   for (const article of articles) {
@@ -3092,6 +3346,7 @@ function renderSiteIndex(articles, context = {}) {
   const facets = context.facets || {};
   const filtered = hasActiveFilters(filters);
   const weeklyPicks = filtered ? [] : context.weeklyPicks || [];
+  const dailyRanking = filtered ? [] : context.dailyRanking || [];
   const pageArticles = articles;
   const countSummary = renderCountSummary(pageArticles.length, totalCount, filters, {
     matchedCount,
@@ -3157,11 +3412,17 @@ function renderSiteIndex(articles, context = {}) {
   return pageShell(seoTitle, `
     <main class="site-shell">
       <header class="site-header">
-        <p>18歳未満閲覧禁止 / 商品リンクはPRを含みます</p>
+        <p>18歳未満閲覧禁止 / 当サイトはアフィリエイト広告を利用しています</p>
         <h1>${escapeBreakableText(heading)}</h1>
         ${countSummary}
         ${breadcrumb}
+        <nav class="primary-site-nav" aria-label="主要ページ">
+          <a href="/site">作品一覧</a>
+          <a href="/site/ranking">人気作品TOP100</a>
+          <a href="/site/policy">運営情報</a>
+        </nav>
       </header>
+      ${renderDailyRankingSection(dailyRanking)}
       ${renderWeeklyPickSection(weeklyPicks)}
       <div class="catalog-layout">
         <aside class="filter-panel">
@@ -3227,6 +3488,99 @@ function renderSiteIndex(articles, context = {}) {
     jsonLd,
     ogType: "website",
   });
+}
+
+function renderDailyRankingSection(articles) {
+  if (!articles.length) return "";
+  const updatedAt = articles[0]?.selection_observed_at
+    ? formatJstDateTime(articles[0].selection_observed_at)
+    : "";
+  return `
+      <section class="daily-ranking" aria-labelledby="daily-ranking-heading">
+        <div class="section-heading ranking-heading">
+          <div>
+            <p>DMM API人気順 / 24時間ごとに更新${updatedAt ? ` / ${escapeHtml(updatedAt)}時点` : ""}</p>
+            <h2 id="daily-ranking-heading">今人気の作品 TOP${articles.length}</h2>
+          </div>
+          <a class="section-more-link" href="/site/ranking">TOP100をすべて見る</a>
+        </div>
+        <div class="ranking-grid">
+          ${articles.map((article) => renderRankingCard(article)).join("")}
+        </div>
+      </section>
+  `;
+}
+
+function renderRankingPage(articles, options = {}) {
+  const origin = options.origin || "";
+  const updatedAt = articles[0]?.selection_observed_at
+    ? formatJstDateTime(articles[0].selection_observed_at)
+    : "";
+  const canonicalUrl = origin ? absoluteSiteUrl(origin, "/site/ranking") : "";
+  const title = `24時間ごと更新 人気同人誌・エロ漫画TOP${articles.length}`;
+  const description = truncateText(
+    `DMM WebサービスAPIの人気順をもとに、コミック上位${articles.length}作品を24時間ごとに更新しています。サンプル画像、サークル、ジャンルから気になる作品を探せます。`,
+    155
+  );
+  const jsonLd = origin
+    ? collectionJsonLd({
+        origin,
+        title,
+        description,
+        url: canonicalUrl,
+        articles,
+      })
+    : null;
+
+  return pageShell(`${title} | ${SITE_NAME}`, `
+    <main class="site-shell ranking-page">
+      <header class="site-header">
+        <p>18歳未満閲覧禁止 / 当サイトはアフィリエイト広告を利用しています</p>
+        <h1>${escapeHtml(title)}</h1>
+        <p class="ranking-lead">DMM APIの人気順をもとに掲載しています。${updatedAt ? `最終更新: ${escapeHtml(updatedAt)}` : ""}</p>
+        <nav class="primary-site-nav" aria-label="主要ページ">
+          <a href="/site">作品一覧</a>
+          <a href="/site/ranking" aria-current="page">人気作品TOP100</a>
+          <a href="/site/policy">運営情報</a>
+        </nav>
+      </header>
+      <section class="ranking-grid ranking-grid-full" aria-label="人気作品ランキング">
+        ${articles.map((article) => renderRankingCard(article)).join("")}
+      </section>
+    </main>
+  `, {
+    description,
+    canonicalUrl,
+    jsonLd,
+    ogType: "website",
+  });
+}
+
+function renderRankingCard(article) {
+  const articleLink = `/site/posts/${encodeURIComponent(article.slug)}`;
+  const productLink = productPageUrl(article);
+  const rank = Number(article.selection_rank || 0);
+  return `
+        <article class="ranking-card">
+          <a class="ranking-image-link" href="${articleLink}">
+            ${article.thumbnail_url ? `<img src="${escapeHtml(article.thumbnail_url)}" alt="" loading="lazy" decoding="async">` : ""}
+            ${rank ? `<span class="rank-badge">${rank}</span>` : ""}
+          </a>
+          <div class="ranking-card-body">
+            <h3><a href="${articleLink}">${escapeBreakableText(article.title)}</a></h3>
+            ${article.circle_name ? `<p class="work-meta">${escapeHtml(article.circle_name)}</p>` : ""}
+            <div class="ranking-actions">
+              <a class="secondary-action" href="${articleLink}">作品紹介を見る</a>
+              ${productLink ? affiliateLink(article, {
+                className: "affiliate-action",
+                label: "FANZAで確認",
+                placement: "ranking_card",
+                variant: "rank",
+              }) : ""}
+            </div>
+          </div>
+        </article>
+  `;
 }
 
 function siteIndexHeading(filters = {}) {
@@ -3299,7 +3653,8 @@ function renderPolicyPage(options = {}) {
       </section>
       <section>
         <h2>掲載リンクについて</h2>
-        <p>作品ページへのリンクには、PRを含む成果報酬型リンクを掲載する場合があります。価格、販売状況、対応環境、注意事項は、購入前にリンク先の販売ページで必ず確認してください。</p>
+        <p>当サイトはDMM/FANZAのアフィリエイト広告を利用しています。作品ページへのリンクを経由して購入等が行われた場合、当サイトに成果報酬が発生することがあります。</p>
+        <p>広告であることを隠す表示や、誤認を招くクリック誘導は行いません。価格、販売状況、対応環境、注意事項は、購入前にリンク先の販売ページで必ず確認してください。</p>
       </section>
       <section>
         <h2>画像・引用の扱い</h2>
@@ -3308,6 +3663,7 @@ function renderPolicyPage(options = {}) {
       <section>
         <h2>プライバシー</h2>
         <p>お問い合わせ時に入力された名前、メールアドレス、本文は、返信と確認対応のために利用します。法令に基づく場合を除き、本人の同意なく第三者へ提供しません。</p>
+        <p>広告導線の改善のため、アフィリエイトリンクの表示回数とクリック数を、作品・掲載位置・日・端末種別ごとの合計値として記録します。この計測ではCookieを使用せず、IPアドレスを保存しません。</p>
         <p>サーバーの保守や不正利用対策のため、ホスティング事業者側でアクセスログが記録される場合があります。</p>
       </section>
       <section>
@@ -3408,7 +3764,7 @@ function renderWeeklyPickSection(articles) {
       <section class="weekly-picks" aria-labelledby="weekly-picks-heading">
         <div class="section-heading">
           <p>編集ピックアップ</p>
-          <h2 id="weekly-picks-heading">今週のおすすめ</h2>
+          <h2 id="weekly-picks-heading">編集部の注目作品</h2>
         </div>
         <div class="weekly-pick-grid">
           ${articles.map((article) => renderWeeklyPickCard(article)).join("")}
@@ -3425,6 +3781,16 @@ function renderWeeklyPickCard(article) {
               ${renderSampleCarousel(article, productLink, "weekly")}
               <div class="weekly-pick-body">
                 <h3><a href="${articleLink}">${escapeBreakableText(article.title)}</a></h3>
+                ${article.editor_note ? `<p class="editor-note">${escapeHtml(article.editor_note)}</p>` : ""}
+                <div class="pick-actions">
+                  <a class="secondary-action" href="${articleLink}">作品紹介を見る</a>
+                  ${productLink ? affiliateLink(article, {
+                    className: "pick-cta",
+                    label: "FANZAでサンプル・価格を見る",
+                    placement: "weekly_pick",
+                    variant: "cta",
+                  }) : ""}
+                </div>
               </div>
             </article>
   `;
@@ -3448,7 +3814,10 @@ function renderArticlePage(article, options = {}) {
   const sampleViewer = sampleImages.length ? renderSampleCarousel(metadata, productLink, "article") : "";
   const heroImage = !sampleViewer && metadata.thumbnail_url
     ? productLink
-      ? `<a class="image-product-link hero-link" href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer" aria-label="商品ページを開く"><img class="hero-image" src="${escapeHtml(metadata.thumbnail_url)}" alt=""></a>`
+      ? `<a class="image-product-link hero-link" href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer" aria-label="FANZAの商品ページを開く"${affiliateTrackingAttributes(metadata, {
+          placement: "article_hero",
+          variant: "image",
+        })}><img class="hero-image" src="${escapeHtml(metadata.thumbnail_url)}" alt=""></a>`
       : `<img class="hero-image" src="${escapeHtml(metadata.thumbnail_url)}" alt="">`
     : "";
   const canonicalUrl = origin ? absoluteSiteUrl(origin, `/site/posts/${encodeURIComponent(metadata.slug)}`) : "";
@@ -3472,9 +3841,10 @@ function renderArticlePage(article, options = {}) {
           ${circleLink || authorLink ? `<p class="work-meta">${circleLink}${circleLink && authorLink ? " / " : ""}${authorLink}</p>` : ""}
           <div class="tags">${labels}</div>
         </header>
+        ${productLink ? renderArticleAffiliateCta(metadata, "article_top") : ""}
         ${sampleViewer || heroImage}
         <div class="article-body">${body}</div>
-        ${productLink ? `<p class="cta"><a href="${escapeHtml(productLink)}" target="_blank" rel="sponsored noopener noreferrer">作品ページを確認する</a></p>` : ""}
+        ${productLink ? renderArticleAffiliateCta(metadata, "article_bottom") : ""}
       </article>
     </main>
   `, {
@@ -3564,7 +3934,10 @@ function renderSampleCarousel(article, productLink = "", variant = "") {
     .map((url, index) => {
       const image = `<img src="${escapeHtml(url)}" alt="${escapeHtml(`${article.title || "作品"} 試し読み ${index + 1}`)}" loading="lazy">`;
       return link
-        ? `<a class="sample-slide" href="${escapeHtml(link)}" target="_blank" rel="sponsored noopener noreferrer">${image}</a>`
+        ? `<a class="sample-slide" href="${escapeHtml(link)}" target="_blank" rel="sponsored noopener noreferrer"${affiliateTrackingAttributes(article, {
+            placement: variant === "weekly" ? "weekly_pick" : "article_sample",
+            variant: "sample",
+          })}>${image}</a>`
         : `<span class="sample-slide">${image}</span>`;
     })
     .join("");
@@ -3676,6 +4049,20 @@ function formatCount(value) {
   return Number(value || 0).toLocaleString("ja-JP");
 }
 
+function formatJstDateTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
 function truncateText(value, maxLength = 155) {
   const text = String(value || "").replace(/\s+/gu, " ").trim();
   if (text.length <= maxLength) return text;
@@ -3723,6 +4110,52 @@ function distinctValues(values) {
 
 function productPageUrl(metadata) {
   return String(metadata.affiliate_url || metadata.source_url || "").trim();
+}
+
+function affiliateTrackingAttributes(metadata, options = {}) {
+  const slug = String(metadata?.slug || "").trim();
+  const affiliateUrl = String(metadata?.affiliate_url || "").trim();
+  const placement = String(options.placement || "").trim();
+  const variant = String(options.variant || "").trim();
+  if (!slug || !affiliateUrl || !AFFILIATE_PLACEMENTS.has(placement)) return "";
+  return [
+    ' data-affiliate-link="1"',
+    ` data-affiliate-slug="${escapeHtml(slug)}"`,
+    ` data-affiliate-placement="${escapeHtml(placement)}"`,
+    ` data-affiliate-variant="${escapeHtml(variant)}"`,
+  ].join("");
+}
+
+function affiliateLink(metadata, options = {}) {
+  const href = productPageUrl(metadata);
+  if (!href) return "";
+  const className = String(options.className || "affiliate-action").trim();
+  const label = String(options.label || "FANZAで確認する").trim();
+  return `<a class="${escapeHtml(className)}" href="${escapeHtml(href)}" target="_blank" rel="sponsored noopener noreferrer"${affiliateTrackingAttributes(metadata, options)}>${escapeHtml(label)}</a>`;
+}
+
+function articleCtaVariant(metadata) {
+  const source = String(metadata?.product_id || metadata?.slug || "");
+  const bucket = [...source].reduce((total, character) => total + character.codePointAt(0), 0) % 2;
+  return bucket === 0
+    ? { key: "a", label: "FANZAでサンプル・価格を見る" }
+    : { key: "b", label: "この作品をFANZAで確認する" };
+}
+
+function renderArticleAffiliateCta(metadata, placement) {
+  const variant = articleCtaVariant(metadata);
+  return `
+        <aside class="affiliate-cta-box" aria-label="商品ページへの案内">
+          <p class="affiliate-cta-label">PR / 外部サイトへ移動します</p>
+          ${affiliateLink(metadata, {
+            className: "affiliate-cta-button",
+            label: variant.label,
+            placement,
+            variant: variant.key,
+          })}
+          <p class="affiliate-cta-note">価格・販売状況・対応環境はリンク先で確認してください。</p>
+        </aside>
+  `;
 }
 
 function absoluteSiteUrl(origin, path) {
@@ -3979,10 +4412,11 @@ function siteFooter() {
   <div class="site-footer-inner">
     <nav class="footer-links" aria-label="サイト情報">
       <a href="/site">作品一覧</a>
+      <a href="/site/ranking">人気作品TOP100</a>
       <a href="/site/policy">運営情報・サイトポリシー</a>
       <a href="/site/contact">お問い合わせ</a>
     </nav>
-    <p>掲載リンクについて: 商品リンクにはアフィリエイトプログラムによる収益が発生する場合があります。</p>
+    <p>広告について: 当サイトはDMM/FANZAのアフィリエイト広告を利用しています。</p>
     <p>当サイトはDMM/FANZA公式サイトではありません。</p>
   </div>
 </footer>`;

@@ -2,6 +2,7 @@
   const shellSelector = ".sample-carousel-shell";
   const scrollTimers = new WeakMap();
   const updateFrames = new WeakMap();
+  const affiliateImpressions = new Set();
 
   function trackFor(shell) {
     return shell ? shell.querySelector(".sample-carousel") : null;
@@ -408,6 +409,72 @@
     disclosure.open = !mobile;
   }
 
+  function affiliateEventPayload(link, eventName) {
+    return {
+      event: eventName,
+      slug: link.dataset.affiliateSlug || "",
+      placement: link.dataset.affiliatePlacement || "",
+      variant: link.dataset.affiliateVariant || "",
+    };
+  }
+
+  function sendAffiliateEvent(link, eventName) {
+    const payload = affiliateEventPayload(link, eventName);
+    if (!payload.slug || !payload.placement) return;
+    const body = JSON.stringify(payload);
+
+    if (navigator.sendBeacon) {
+      const sent = navigator.sendBeacon(
+        "/events/affiliate",
+        new Blob([body], { type: "application/json" })
+      );
+      if (sent) return;
+    }
+
+    void fetch("/events/affiliate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      keepalive: true,
+      credentials: "same-origin",
+    }).catch(() => {});
+  }
+
+  function initAffiliateTracking(root = document) {
+    if (new URLSearchParams(window.location.search).get("affiliate_tracking") === "off") {
+      return;
+    }
+    const links = [...root.querySelectorAll("[data-affiliate-link]")];
+    if (!links.length) return;
+
+    links.forEach((link) => {
+      if (link.dataset.affiliateClickReady) return;
+      link.dataset.affiliateClickReady = "1";
+      link.addEventListener("click", () => sendAffiliateEvent(link, "click"));
+    });
+
+    if (!("IntersectionObserver" in window)) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting || entry.intersectionRatio < 0.5) return;
+          const link = entry.target;
+          const key = [
+            link.dataset.affiliateSlug,
+            link.dataset.affiliatePlacement,
+            link.dataset.affiliateVariant,
+          ].join("|");
+          observer.unobserve(link);
+          if (affiliateImpressions.has(key)) return;
+          affiliateImpressions.add(key);
+          sendAffiliateEvent(link, "impression");
+        });
+      },
+      { threshold: [0.5] }
+    );
+    links.forEach((link) => observer.observe(link));
+  }
+
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-sample-nav]");
     if (!button) return;
@@ -426,6 +493,7 @@
     refresh();
     initFilterDisclosure();
     initSearchSuggestions();
+    initAffiliateTracking();
   }
 
   if (document.readyState === "loading") {
